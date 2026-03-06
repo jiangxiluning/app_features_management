@@ -41,24 +41,26 @@ const rules = {
 const handleLogin = async () => {
   if (!loginFormRef.value) return
   
-  await loginFormRef.value.validate(async (valid) => {
-    if (valid) {
-      loading.value = true
-      try {
-        const response = await authAPI.login(loginForm)
-        localStorage.setItem('token', response.data.access_token)
-        localStorage.setItem('role', response.data.role)
-        localStorage.setItem('username', response.data.username)
-        localStorage.setItem('user_id', response.data.user_id)
-        ElMessage.success('登录成功')
-        router.push('/')
-      } catch (error) {
-        ElMessage.error('登录失败，请检查用户名和密码')
-      } finally {
-        loading.value = false
-      }
+  const valid = await loginFormRef.value.validate()
+  if (valid) {
+    loading.value = true
+    try {
+      console.log('发送登录请求:', loginForm)
+      const response = await authAPI.login(loginForm)
+      console.log('登录成功:', response.data)
+      localStorage.setItem('token', response.data.access_token)
+      localStorage.setItem('role', response.data.role)
+      localStorage.setItem('username', response.data.username)
+      localStorage.setItem('user_id', response.data.user_id)
+      ElMessage.success('登录成功')
+      router.push('/')
+    } catch (error) {
+      console.error('登录失败:', error)
+      ElMessage.error('登录失败，请检查用户名和密码')
+    } finally {
+      loading.value = false
     }
-  })
+  }
 }
 </script>
 

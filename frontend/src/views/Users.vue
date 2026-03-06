@@ -138,13 +138,12 @@ const saveUser = async () => {
   try {
     if (isAddUser.value) {
       // 添加用户
-      // 加密密码
-      const encryptedPassword = await encryptPassword(editForm.value.password)
+      // 哈希密码
+      const hashedPassword = await encryptPassword(editForm.value.password)
       const response = await api.post('/auth/register', {
         username: editForm.value.username,
-        password: encryptedPassword.password,
-        salt: encryptedPassword.salt,
-        iv: encryptedPassword.iv,
+        password: hashedPassword.password,
+        salt: hashedPassword.salt,
         role: editForm.value.role,
         user_role: 'admin' // 管理员操作
       })
@@ -153,15 +152,14 @@ const saveUser = async () => {
       editDialogVisible.value = false
     } else {
       // 更新用户
-      // 如果更新密码，需要加密
+      // 如果更新密码，需要哈希
       let updateData = { ...editForm.value }
       if (updateData.password) {
-        const encryptedPassword = await encryptPassword(updateData.password)
+        const hashedPassword = await encryptPassword(updateData.password)
         updateData = {
           ...updateData,
-          password: encryptedPassword.password,
-          salt: encryptedPassword.salt,
-          iv: encryptedPassword.iv
+          password: hashedPassword.password,
+          salt: hashedPassword.salt
         }
       }
       const response = await api.put(`/users/${editForm.value.id}`, updateData)

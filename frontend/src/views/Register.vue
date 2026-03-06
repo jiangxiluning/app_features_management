@@ -46,13 +46,12 @@ export default {
       }
       
       try {
-        // 加密密码
-        const encryptedPassword = await encryptPassword(this.form.password)
+        // 哈希密码
+        const hashedPassword = await encryptPassword(this.form.password)
         const response = await api.post('/auth/register', {
           username: this.form.username,
-          password: encryptedPassword.password,
-          salt: encryptedPassword.salt,
-          iv: encryptedPassword.iv
+          password: hashedPassword.password,
+          salt: hashedPassword.salt
         });
         
         this.message = '注册成功，请登录';

@@ -1,56 +1,28 @@
 import axios from 'axios'
 
-// 密码加密函数
+// 密码哈希函数
 export const encryptPassword = async (password) => {
-  // 使用 Web Crypto API 生成随机盐
-  const salt = crypto.getRandomValues(new Uint8Array(16))
-  // 生成密钥
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(password),
-    { name: 'PBKDF2' },
-    false,
-    ['deriveBits', 'deriveKey']
-  )
-  // 派生密钥
-  const derivedKey = await crypto.subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      salt: salt,
-      iterations: 100000,
-      hash: 'SHA-256'
-    },
-    key,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt']
-  )
-  // 生成随机初始化向量
-  const iv = crypto.getRandomValues(new Uint8Array(12))
-  // 加密密码
-  const encrypted = await crypto.subtle.encrypt(
-    {
-      name: 'AES-GCM',
-      iv: iv
-    },
-    derivedKey,
-    new TextEncoder().encode(password)
-  )
-  // 返回加密后的密码、盐和初始化向量
+  // 使用简单的 SHA-256 哈希
+  const encoder = new TextEncoder()
+  const data = encoder.encode(password)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+  // 返回哈希后的密码
   return {
-    password: btoa(String.fromCharCode(...new Uint8Array(encrypted))),
-    salt: btoa(String.fromCharCode(...salt)),
-    iv: btoa(String.fromCharCode(...iv))
+    password: hashHex,
+    salt: ''
   }
 }
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: 'http://127.0.0.1:5001/api',
   timeout: 10000
 })
 
 // 添加请求拦截器，确保携带token
 api.interceptors.request.use(config => {
+  console.log('发送请求:', config.url, config.data)
   const token = localStorage.getItem('token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
@@ -58,35 +30,41 @@ api.interceptors.request.use(config => {
   return config
 })
 
+// 添加响应拦截器，查看响应结果
+api.interceptors.response.use(response => {
+  console.log('收到响应:', response.config.url, response.data)
+  return response
+}, error => {
+  console.error('响应错误:', error.config?.url, error.message, error.response?.data)
+  return Promise.reject(error)
+})
+
 // 认证相关
 export const authAPI = {
   login: async (data) => {
-    // 加密密码
-    const encryptedPassword = await encryptPassword(data.password)
-    // 构建新的请求数据
-    const encryptedData = {
-      ...data,
-      password: encryptedPassword.password,
-      salt: encryptedPassword.salt,
-      iv: encryptedPassword.iv
+    // 哈希密码
+    const hashedPassword = await encryptPassword(data.password)
+    // 构建新的请求数据，只包含必要的字段
+    const hashedData = {
+      username: data.username,
+      password: hashedPassword.password,
+      salt: hashedPassword.salt
     }
-    return api.post('/auth/login', encryptedData)
+    return api.post('/auth/login', hashedData)
   },
   changePassword: async (data) => {
-    // 加密原密码和新密码
-    const encryptedOldPassword = await encryptPassword(data.old_password)
-    const encryptedNewPassword = await encryptPassword(data.new_password)
+    // 哈希原密码和新密码
+    const hashedOldPassword = await encryptPassword(data.old_password)
+    const hashedNewPassword = await encryptPassword(data.new_password)
     // 构建新的请求数据
-    const encryptedData = {
+    const hashedData = {
       ...data,
-      old_password: encryptedOldPassword.password,
-      old_salt: encryptedOldPassword.salt,
-      old_iv: encryptedOldPassword.iv,
-      new_password: encryptedNewPassword.password,
-      new_salt: encryptedNewPassword.salt,
-      new_iv: encryptedNewPassword.iv
+      old_password: hashedOldPassword.password,
+      old_salt: hashedOldPassword.salt,
+      new_password: hashedNewPassword.password,
+      new_salt: hashedNewPassword.salt
     }
-    return api.post('/auth/change-password', encryptedData)
+    return api.post('/auth/change-password', hashedData)
   }
 }
 
