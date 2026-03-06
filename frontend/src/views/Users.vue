@@ -72,7 +72,8 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { featureAPI } from '../api'
+import { featureAPI, authAPI } from '../api'
+import api from '../api'
 import { ElMessage } from 'element-plus'
 
 const users = ref([])
@@ -87,9 +88,8 @@ const isAddUser = ref(false)
 // 获取用户列表
 const getUsers = async () => {
   try {
-    const response = await fetch('http://localhost:5001/api/users')
-    const data = await response.json()
-    users.value = data
+    const response = await api.get('/users')
+    users.value = response.data
   } catch (error) {
     ElMessage.error('获取用户列表失败')
   }
@@ -138,43 +138,21 @@ const saveUser = async () => {
   try {
     if (isAddUser.value) {
       // 添加用户
-      const response = await fetch('http://localhost:5001/api/auth/register', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          username: editForm.value.username,
-          password: editForm.value.password,
-          role: editForm.value.role,
-          user_role: 'admin' // 管理员操作
-        })
+      const response = await api.post('/auth/register', {
+        username: editForm.value.username,
+        password: editForm.value.password,
+        role: editForm.value.role,
+        user_role: 'admin' // 管理员操作
       })
-      const data = await response.json()
-      if (response.ok) {
-        ElMessage.success('用户添加成功')
-        getUsers()
-        editDialogVisible.value = false
-      } else {
-        ElMessage.error(data.message || '用户添加失败')
-      }
+      ElMessage.success('用户添加成功')
+      getUsers()
+      editDialogVisible.value = false
     } else {
       // 更新用户
-      const response = await fetch(`http://localhost:5001/api/users/${editForm.value.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(editForm.value)
-      })
-      const data = await response.json()
-      if (response.ok) {
-        ElMessage.success('用户更新成功')
-        getUsers()
-        editDialogVisible.value = false
-      } else {
-        ElMessage.error(data.message || '用户更新失败')
-      }
+      const response = await api.put(`/users/${editForm.value.id}`, editForm.value)
+      ElMessage.success('用户更新成功')
+      getUsers()
+      editDialogVisible.value = false
     }
   } catch (error) {
     ElMessage.error('网络错误')
@@ -184,16 +162,9 @@ const saveUser = async () => {
 // 删除用户
 const deleteUser = async (id) => {
   try {
-    const response = await fetch(`http://localhost:5001/api/users/${id}`, {
-      method: 'DELETE'
-    })
-    const data = await response.json()
-    if (response.ok) {
-      ElMessage.success('用户删除成功')
-      getUsers()
-    } else {
-      ElMessage.error(data.message || '用户删除失败')
-    }
+    const response = await api.delete(`/users/${id}`)
+    ElMessage.success('用户删除成功')
+    getUsers()
   } catch (error) {
     ElMessage.error('网络错误')
   }
@@ -204,9 +175,8 @@ const assignApps = async (user) => {
   currentUser.value = { ...user }
   // 获取用户已分配的应用
   try {
-    const response = await fetch(`http://localhost:5001/api/user-apps/${user.id}`)
-    const data = await response.json()
-    selectedApps.value = data.map(item => item.app_id)
+    const response = await api.get(`/user-apps/${user.id}`)
+    selectedApps.value = response.data.map(item => item.app_id)
     getApps()
     assignDialogVisible.value = true
   } catch (error) {
@@ -218,24 +188,16 @@ const assignApps = async (user) => {
 const saveAppAssignments = async () => {
   try {
     // 先删除用户现有的应用分配
-    const response = await fetch(`http://localhost:5001/api/user-apps/${currentUser.value.id}`)
-    const existingAssignments = await response.json()
+    const response = await api.get(`/user-apps/${currentUser.value.id}`)
+    const existingAssignments = response.data
     for (const assignment of existingAssignments) {
-      await fetch(`http://localhost:5001/api/user-apps/${assignment.id}`, {
-        method: 'DELETE'
-      })
+      await api.delete(`/user-apps/${assignment.id}`)
     }
     // 添加新的应用分配
     for (const appId of selectedApps.value) {
-      await fetch('http://localhost:5001/api/user-apps', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          user_id: currentUser.value.id,
-          app_id: appId
-        })
+      await api.post('/user-apps', {
+        user_id: currentUser.value.id,
+        app_id: appId
       })
     }
     ElMessage.success('应用分配成功')
