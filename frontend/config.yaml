@@ -1,0 +1,22 @@
+# 前端部署配置
+
+# 服务器配置
+server:
+  # 部署的服务器地址
+  host: localhost
+  # 部署的服务器端口
+  port: 8080
+
+# API配置
+api:
+  # 后端API地址
+  base_url: http://localhost:5001
+  # API超时时间（毫秒）
+  timeout: 10000
+
+# 构建配置
+build:
+  # 构建模式: development, production
+  mode: production
+  # 构建输出目录
+  output_dir: dist
