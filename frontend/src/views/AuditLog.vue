@@ -250,6 +250,7 @@ import { ref, onMounted, computed, h } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowRight } from '@element-plus/icons-vue'
 import { marked } from 'marked'
+import api from '../api'
 
 // 渲染功能详情组件
 const RenderFeatureDetails = {
@@ -455,27 +456,21 @@ const paginatedAuditLogs = computed(() => {
 
 const getAuditLogs = async () => {
   try {
-    let url = 'http://localhost:5001/api/audit-logs'
-    const params = new URLSearchParams()
+    const params = {}
     
     if (!isAdmin.value && currentUsername.value) {
-      params.append('created_by', currentUsername.value)
+      params.created_by = currentUsername.value
     }
     
     if (Array.isArray(dateFilter.value) && dateFilter.value.length === 2) {
-      params.append('start_date', dateFilter.value[0])
-      params.append('end_date', dateFilter.value[1])
+      params.start_date = dateFilter.value[0]
+      params.end_date = dateFilter.value[1]
     } else if (dateFilter.value) {
-      params.append('date', dateFilter.value)
+      params.date = dateFilter.value
     }
     
-    if (params.toString()) {
-      url += `?${params.toString()}`
-    }
-    
-    const response = await fetch(url)
-    const data = await response.json()
-    auditLogs.value = data
+    const response = await api.get('/audit-logs', { params })
+    auditLogs.value = response.data
     filteredAuditLogs.value = []
   } catch (error) {
     ElMessage.error('获取审核日志失败')

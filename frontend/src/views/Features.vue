@@ -2212,23 +2212,14 @@ const confirmExport = async () => {
     const appName = currentContextNode.value.name || 'app'
     
     // 调用后端API导出zip文件，传递模板内容
-    const response = await fetch(`http://localhost:5001/api/features/${appId}/export`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        template: exportTemplate.value
-      })
+    const response = await api.post(`/features/${appId}/export`, {
+      template: exportTemplate.value
+    }, {
+      responseType: 'blob'
     })
     
-    if (!response.ok) {
-      const errorData = await response.json()
-      throw new Error(errorData.message || '导出失败')
-    }
-    
     // 处理blob响应
-    const blob = await response.blob()
+    const blob = response.data
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url

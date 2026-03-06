@@ -22,6 +22,8 @@
 </template>
 
 <script>
+import api from '../api'
+
 export default {
   data() {
     return {
@@ -43,28 +45,16 @@ export default {
       }
       
       try {
-        const response = await fetch('http://localhost:5001/api/auth/register', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            username: this.form.username,
-            password: this.form.password
-          })
+        const response = await api.post('/auth/register', {
+          username: this.form.username,
+          password: this.form.password
         });
         
-        const data = await response.json();
-        if (response.ok) {
-          this.message = '注册成功，请登录';
-          this.messageType = 'success';
-          setTimeout(() => {
-            this.$router.push('/login');
-          }, 1500);
-        } else {
-          this.message = data.message || '注册失败';
-          this.messageType = 'error';
-        }
+        this.message = '注册成功，请登录';
+        this.messageType = 'success';
+        setTimeout(() => {
+          this.$router.push('/login');
+        }, 1500);
       } catch (error) {
         this.message = '网络错误，请稍后重试';
         this.messageType = 'error';

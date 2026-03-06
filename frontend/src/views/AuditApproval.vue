@@ -236,6 +236,7 @@ import { ref, onMounted, computed, h } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowRight } from '@element-plus/icons-vue'
 import { marked } from 'marked'
+import api from '../api'
 
 // 渲染功能详情组件
 const RenderFeatureDetails = {
@@ -429,23 +430,17 @@ const paginatedAuditLogs = computed(() => {
 
 const getAuditLogs = async () => {
   try {
-    let url = 'http://localhost:5001/api/audit-logs'
-    const params = new URLSearchParams()
+    const params = {}
     
     if (Array.isArray(dateFilter.value) && dateFilter.value.length === 2) {
-      params.append('start_date', dateFilter.value[0])
-      params.append('end_date', dateFilter.value[1])
+      params.start_date = dateFilter.value[0]
+      params.end_date = dateFilter.value[1]
     } else if (dateFilter.value) {
-      params.append('date', dateFilter.value)
+      params.date = dateFilter.value
     }
     
-    if (params.toString()) {
-      url += `?${params.toString()}`
-    }
-    
-    const response = await fetch(url)
-    const data = await response.json()
-    auditLogs.value = data
+    const response = await api.get('/audit-logs', { params })
+    auditLogs.value = response.data
     filteredAuditLogs.value = []
   } catch (error) {
     ElMessage.error('获取审核日志失败')
@@ -525,22 +520,11 @@ const viewDetails = (audit) => {
 
 const approveAudit = async (id) => {
   try {
-    const response = await fetch(`http://localhost:5001/api/audit-logs/${id}/approve`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        approved_by: localStorage.getItem('username') || 'admin'
-      })
+    const response = await api.post(`/audit-logs/${id}/approve`, {
+      approved_by: localStorage.getItem('username') || 'admin'
     })
-    const data = await response.json()
-    if (response.ok) {
-      ElMessage.success('审核通过')
-      getAuditLogs()
-    } else {
-      ElMessage.error(data.message || '审核失败')
-    }
+    ElMessage.success('审核通过')
+    getAuditLogs()
   } catch (error) {
     ElMessage.error('网络错误')
   }
@@ -548,22 +532,11 @@ const approveAudit = async (id) => {
 
 const rejectAudit = async (id) => {
   try {
-    const response = await fetch(`http://localhost:5001/api/audit-logs/${id}/reject`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        approved_by: localStorage.getItem('username') || 'admin'
-      })
+    const response = await api.post(`/audit-logs/${id}/reject`, {
+      approved_by: localStorage.getItem('username') || 'admin'
     })
-    const data = await response.json()
-    if (response.ok) {
-      ElMessage.success('审核拒绝')
-      getAuditLogs()
-    } else {
-      ElMessage.error(data.message || '审核失败')
-    }
+    ElMessage.success('审核拒绝')
+    getAuditLogs()
   } catch (error) {
     ElMessage.error('网络错误')
   }
