@@ -1,5 +1,49 @@
 import axios from 'axios'
 
+// 密码加密函数
+export const encryptPassword = async (password) => {
+  // 使用 Web Crypto API 生成随机盐
+  const salt = crypto.getRandomValues(new Uint8Array(16))
+  // 生成密钥
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveBits', 'deriveKey']
+  )
+  // 派生密钥
+  const derivedKey = await crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: salt,
+      iterations: 100000,
+      hash: 'SHA-256'
+    },
+    key,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt']
+  )
+  // 生成随机初始化向量
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  // 加密密码
+  const encrypted = await crypto.subtle.encrypt(
+    {
+      name: 'AES-GCM',
+      iv: iv
+    },
+    derivedKey,
+    new TextEncoder().encode(password)
+  )
+  // 返回加密后的密码、盐和初始化向量
+  return {
+    password: btoa(String.fromCharCode(...new Uint8Array(encrypted))),
+    salt: btoa(String.fromCharCode(...salt)),
+    iv: btoa(String.fromCharCode(...iv))
+  }
+}
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 10000
@@ -16,8 +60,34 @@ api.interceptors.request.use(config => {
 
 // 认证相关
 export const authAPI = {
-  login: (data) => api.post('/auth/login', data),
-  changePassword: (data) => api.post('/auth/change-password', data)
+  login: async (data) => {
+    // 加密密码
+    const encryptedPassword = await encryptPassword(data.password)
+    // 构建新的请求数据
+    const encryptedData = {
+      ...data,
+      password: encryptedPassword.password,
+      salt: encryptedPassword.salt,
+      iv: encryptedPassword.iv
+    }
+    return api.post('/auth/login', encryptedData)
+  },
+  changePassword: async (data) => {
+    // 加密原密码和新密码
+    const encryptedOldPassword = await encryptPassword(data.old_password)
+    const encryptedNewPassword = await encryptPassword(data.new_password)
+    // 构建新的请求数据
+    const encryptedData = {
+      ...data,
+      old_password: encryptedOldPassword.password,
+      old_salt: encryptedOldPassword.salt,
+      old_iv: encryptedOldPassword.iv,
+      new_password: encryptedNewPassword.password,
+      new_salt: encryptedNewPassword.salt,
+      new_iv: encryptedNewPassword.iv
+    }
+    return api.post('/auth/change-password', encryptedData)
+  }
 }
 
 // 功能相关

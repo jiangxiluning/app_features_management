@@ -72,7 +72,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { featureAPI, authAPI } from '../api'
+import { featureAPI, authAPI, encryptPassword } from '../api'
 import api from '../api'
 import { ElMessage } from 'element-plus'
 
@@ -138,9 +138,13 @@ const saveUser = async () => {
   try {
     if (isAddUser.value) {
       // 添加用户
+      // 加密密码
+      const encryptedPassword = await encryptPassword(editForm.value.password)
       const response = await api.post('/auth/register', {
         username: editForm.value.username,
-        password: editForm.value.password,
+        password: encryptedPassword.password,
+        salt: encryptedPassword.salt,
+        iv: encryptedPassword.iv,
         role: editForm.value.role,
         user_role: 'admin' // 管理员操作
       })
@@ -149,7 +153,18 @@ const saveUser = async () => {
       editDialogVisible.value = false
     } else {
       // 更新用户
-      const response = await api.put(`/users/${editForm.value.id}`, editForm.value)
+      // 如果更新密码，需要加密
+      let updateData = { ...editForm.value }
+      if (updateData.password) {
+        const encryptedPassword = await encryptPassword(updateData.password)
+        updateData = {
+          ...updateData,
+          password: encryptedPassword.password,
+          salt: encryptedPassword.salt,
+          iv: encryptedPassword.iv
+        }
+      }
+      const response = await api.put(`/users/${editForm.value.id}`, updateData)
       ElMessage.success('用户更新成功')
       getUsers()
       editDialogVisible.value = false

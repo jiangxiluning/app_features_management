@@ -22,6 +22,7 @@
 </template>
 
 <script>
+import { encryptPassword } from '../api'
 import api from '../api'
 
 export default {
@@ -45,9 +46,13 @@ export default {
       }
       
       try {
+        // 加密密码
+        const encryptedPassword = await encryptPassword(this.form.password)
         const response = await api.post('/auth/register', {
           username: this.form.username,
-          password: this.form.password
+          password: encryptedPassword.password,
+          salt: encryptedPassword.salt,
+          iv: encryptedPassword.iv
         });
         
         this.message = '注册成功，请登录';

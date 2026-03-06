@@ -309,10 +309,10 @@
             <el-option label="功能" value="function"></el-option>
           </el-select>
         </el-form-item>
-        <el-form-item label="功能名称" prop="name">
+        <el-form-item :label="featureForm.node_type === 'app' ? '应用名称' : featureForm.node_type === 'category' ? '分类名称' : '功能名称'" prop="name">
           <el-input v-model="featureForm.name"></el-input>
         </el-form-item>
-        <el-form-item label="功能描述" prop="description">
+        <el-form-item :label="featureForm.node_type === 'app' ? '应用描述' : featureForm.node_type === 'category' ? '分类描述' : '功能描述'" prop="description">
           <el-tabs v-model="activeTab">
             <el-tab-pane label="编辑" name="edit">
               <el-input
