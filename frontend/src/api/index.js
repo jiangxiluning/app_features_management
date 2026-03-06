@@ -2,16 +2,40 @@ import axios from 'axios'
 
 // 密码哈希函数
 export const encryptPassword = async (password) => {
-  // 使用简单的 SHA-256 哈希
-  const encoder = new TextEncoder()
-  const data = encoder.encode(password)
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
-  const hashArray = Array.from(new Uint8Array(hashBuffer))
-  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
-  // 返回哈希后的密码
-  return {
-    password: hashHex,
-    salt: ''
+  try {
+    // 尝试使用 Web Crypto API 生成 SHA-256 哈希
+    if (typeof crypto !== 'undefined' && crypto.subtle) {
+      const encoder = new TextEncoder()
+      const data = encoder.encode(password)
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+      const hashArray = Array.from(new Uint8Array(hashBuffer))
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+      // 返回哈希后的密码
+      return {
+        password: hashHex,
+        salt: ''
+      }
+    } else {
+      // 如果 Web Crypto API 不可用，使用简单的哈希方法
+      let hash = 0
+      for (let i = 0; i < password.length; i++) {
+        const char = password.charCodeAt(i)
+        hash = ((hash << 5) - hash) + char
+        hash = hash & hash // 转换为 32 位整数
+      }
+      // 返回哈希后的密码
+      return {
+        password: hash.toString(16),
+        salt: ''
+      }
+    }
+  } catch (error) {
+    console.error('密码哈希失败:', error)
+    // 发生错误时，返回密码本身
+    return {
+      password: password,
+      salt: ''
+    }
   }
 }
 
