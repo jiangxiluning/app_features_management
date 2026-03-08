@@ -160,6 +160,13 @@ class AppVersion(db.Model):
 
 
 
+# 确保instance目录存在
+import os
+instance_dir = os.path.join(os.path.dirname(__file__), 'instance')
+if not os.path.exists(instance_dir):
+    os.makedirs(instance_dir)
+    print(f"Created instance directory: {instance_dir}")
+
 # 创建数据库
 with app.app_context():
     db.create_all()

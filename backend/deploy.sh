@@ -33,6 +33,9 @@ fi
 # 确保备份目录存在
 mkdir -p backups
 
+# 确保instance目录存在
+mkdir -p instance
+
 # 安装依赖
 echo -e "${GREEN}正在安装依赖...${NC}"
 pip3 install -r requirements.txt
