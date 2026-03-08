@@ -305,6 +305,17 @@ def change_password():
         db.session.commit()
         return jsonify(message='密码修改成功')
     
+    # 尝试使用前端的哈希方法验证密码
+    # 前端使用的是 Web Crypto API 的 SHA-256 实现
+    # 后端使用 Python 的 hashlib.sha256 实现
+    # 两者应该是兼容的
+    # 这里尝试将前端发送的密码视为明文，重新哈希后比较
+    if hash_password(data['old_password']) == user.password:
+        # 尝试将新密码视为明文，重新哈希后存储
+        user.password = hash_password(data['new_password'])
+        db.session.commit()
+        return jsonify(message='密码修改成功')
+    
     return jsonify(message='用户名或旧密码错误'), 401
 
 
