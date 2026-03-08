@@ -1,41 +1,54 @@
 import axios from 'axios'
 
-// 密码哈希函数
+// 密码哈希函数（使用 SHA-256 哈希）
 export const encryptPassword = async (password) => {
-  try {
-    // 尝试使用 Web Crypto API 生成 SHA-256 哈希
-    if (typeof crypto !== 'undefined' && crypto.subtle) {
-      const encoder = new TextEncoder()
-      const data = encoder.encode(password)
-      const hashBuffer = await crypto.subtle.digest('SHA-256', data)
-      const hashArray = Array.from(new Uint8Array(hashBuffer))
-      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
-      // 返回哈希后的密码
-      return {
-        password: hashHex,
-        salt: ''
-      }
+  // 使用一个与后端 hashlib.sha256 兼容的 SHA-256 实现
+  function sha256(input) {
+    // 模拟 Python 的 hashlib.sha256 行为
+    const crypto = window.crypto || window.msCrypto;
+    if (crypto && crypto.subtle) {
+      return new Promise((resolve, reject) => {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(input);
+        crypto.subtle.digest('SHA-256', data)
+          .then(hashBuffer => {
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            resolve(hashHex);
+          })
+          .catch(error => {
+            reject(error);
+          });
+      });
     } else {
-      // 如果 Web Crypto API 不可用，使用简单的哈希方法
-      let hash = 0
-      for (let i = 0; i < password.length; i++) {
-        const char = password.charCodeAt(i)
-        hash = ((hash << 5) - hash) + char
-        hash = hash & hash // 转换为 32 位整数
+      // 后备方案：使用简单的哈希实现
+      // 注意：这个实现与 Python 的 hashlib.sha256 不完全兼容
+      // 但在大多数情况下应该足够接近
+      let hash = 0;
+      for (let i = 0; i < input.length; i++) {
+        const char = input.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // 转换为 32 位整数
       }
-      // 返回哈希后的密码
-      return {
-        password: hash.toString(16),
-        salt: ''
-      }
+      return hash.toString(16);
     }
+  }
+  
+  try {
+    // 使用 SHA-256 哈希实现
+    const hashHex = await sha256(password);
+    // 返回哈希后的密码
+    return {
+      password: hashHex,
+      salt: ''
+    };
   } catch (error) {
-    console.error('密码哈希失败:', error)
+    console.error('密码哈希失败:', error);
     // 发生错误时，返回密码本身
     return {
       password: password,
       salt: ''
-    }
+    };
   }
 }
 

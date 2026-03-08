@@ -2,3 +2,6 @@ Flask
 Flask-SQLAlchemy
 Flask-JWT-Extended
 python-dotenv
+Flask-Cors
+schedule
+pyyaml

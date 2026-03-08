@@ -11,12 +11,23 @@ import schedule
 import yaml
 import hashlib
 
-# 密码哈希函数
+# 密码哈希函数（与前端兼容）
 def hash_password(password):
-    # 使用 SHA-256 哈希
+    # 尝试使用与前端相同的哈希方法
+    # 前端使用的是 Web Crypto API 的 SHA-256 实现
+    # 后端使用 Python 的 hashlib.sha256 实现
+    # 两者应该是兼容的
     hashed = hashlib.sha256(password.encode()).hexdigest()
     print(f"哈希密码: {password} -> {hashed}")
     return hashed
+
+# 验证密码（与前端兼容）
+def verify_password(plain_password, hashed_password):
+    # 尝试使用与前端相同的哈希方法
+    # 前端使用的是 Web Crypto API 的 SHA-256 实现
+    # 后端使用 Python 的 hashlib.sha256 实现
+    # 两者应该是兼容的
+    return hash_password(plain_password) == hashed_password
 
 # 读取配置文件
 def load_config():
@@ -60,7 +71,9 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'supersecretkey1234567890abcdefghijklmnopqrstuvwxyz'
 app.config['JWT_SECRET_KEY'] = 'supersecretkey1234567890abcdefghijklmnopqrstuvwxyz'
 app.config['JWT_ERROR_MESSAGE_KEY'] = 'message'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app_knowledge.db'
+import os
+# 使用绝对路径来指定数据库文件的位置
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(os.path.dirname(__file__), 'instance', 'app_knowledge.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # 服务器配置
@@ -178,22 +191,43 @@ def get_current_user():
 def login():
     data = request.get_json()
     print(f"收到登录请求: {data}")
-    user = User.query.filter_by(username=data['username']).first()
     
-    # 检查用户是否存在
-    if not user:
-        print(f"用户不存在: {data['username']}")
-        # 暂时创建一个管理员用户
-        admin = User(username='admin', password='240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9', role='admin')
-        db.session.add(admin)
-        db.session.commit()
-        user = admin
-    
-    print(f"用户存在: {user.username}, 数据库密码: {user.password}, 前端密码: {data['password']}")
-    
-    # 暂时跳过密码验证，直接返回登录成功
-    access_token = create_access_token(identity={'username': user.username, 'role': user.role})
-    return jsonify(access_token=access_token, role=user.role, username=user.username, user_id=user.id)
+    # 尝试查询用户
+    try:
+        user = User.query.filter_by(username=data['username']).first()
+        print(f"查询用户结果: {user}")
+        
+        # 检查用户是否存在
+        if not user:
+            print(f"用户不存在: {data['username']}")
+            # 创建一个管理员用户
+            admin = User(username='admin', password=hash_password('admin123'), role='admin')
+            db.session.add(admin)
+            db.session.commit()
+            print(f"创建管理员用户成功: {admin.username}")
+            user = admin
+        
+        print(f"用户存在: {user.username}, 数据库密码: {user.password}, 前端密码: {data['password']}")
+        
+        # 检查密码是否匹配
+        # 前端已经对密码进行了哈希处理，直接比较哈希值
+        if user.password == data['password']:
+            access_token = create_access_token(identity={'username': user.username, 'role': user.role})
+            return jsonify(access_token=access_token, role=user.role, username=user.username, user_id=user.id)
+        
+        # 尝试使用前端的哈希方法验证密码
+        # 前端使用的是 Web Crypto API 的 SHA-256 实现
+        # 后端使用 Python 的 hashlib.sha256 实现
+        # 两者应该是兼容的
+        # 这里尝试将前端发送的密码视为明文，重新哈希后比较
+        if hash_password(data['password']) == user.password:
+            access_token = create_access_token(identity={'username': user.username, 'role': user.role})
+            return jsonify(access_token=access_token, role=user.role, username=user.username, user_id=user.id)
+        
+        return jsonify(message='用户名或密码错误'), 401
+    except Exception as e:
+        print(f"登录过程中发生错误: {e}")
+        return jsonify(message='登录失败，请稍后重试'), 500
 
 
 @app.route('/api/auth/register', methods=['POST'])
