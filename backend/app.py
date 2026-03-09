@@ -216,10 +216,6 @@ def login():
         
         print(f"用户存在: {user.username}, 数据库密码: {user.password}, 前端密码: {data['password']}")
         
-        # 计算默认密码的哈希值，用于调试
-        default_admin_hash = hash_password('admin')
-        print(f"admin 的哈希值: {default_admin_hash}")
-        
         # 检查密码是否匹配
         # 前端已经对密码进行了哈希处理，直接比较哈希值
         if user.password == data['password']:
@@ -239,14 +235,7 @@ def login():
             access_token = create_access_token(identity={'username': user.username, 'role': user.role})
             return jsonify(access_token=access_token, role=user.role, username=user.username, user_id=user.id)
         
-        # 特殊处理：如果是 admin 用户，尝试使用默认密码 'admin' 进行验证
-        if user.username == 'admin':
-            print("尝试使用默认密码 'admin' 进行验证")
-            if data['password'] == 'admin' or hash_password('admin') == user.password:
-                print("密码匹配: 使用默认密码 'admin'")
-                access_token = create_access_token(identity={'username': user.username, 'role': user.role})
-                return jsonify(access_token=access_token, role=user.role, username=user.username, user_id=user.id)
-        
+        # 密码不匹配，返回错误
         print("密码不匹配")
         return jsonify(message='用户名或密码错误'), 401
     except Exception as e:
