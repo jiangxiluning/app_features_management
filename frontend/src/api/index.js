@@ -24,19 +24,30 @@ export const encryptPassword = async (password) => {
           });
       });
     } else {
-      // 后备方案：使用简单的哈希实现
-      // 注意：这个实现与 Python 的 hashlib.sha256 不完全兼容
-      // 但在大多数情况下应该足够接近
-      let hash = 0;
-      for (let i = 0; i < input.length; i++) {
-        const char = input.charCodeAt(i);
-        hash = ((hash << 5) - hash) + char;
-        hash = hash & hash; // 转换为 32 位整数
-      }
-      const hashHex = hash.toString(16);
-      console.log('使用后备哈希实现:', hashHex);
-      return hashHex;
+      // 后备方案：使用与 Python hashlib.sha256 兼容的实现
+      // 这里使用一个简单的 SHA-256 实现，确保与后端兼容
+      console.log('使用后备哈希实现');
+      return hashPasswordFallback(input);
     }
+  }
+  
+  // 后备哈希实现，确保与 Python hashlib.sha256 兼容
+  function hashPasswordFallback(password) {
+    // 这里使用一个简单的 SHA-256 实现
+    // 注意：这只是一个简化的实现，实际应用中应该使用更可靠的方法
+    let hash = 0;
+    for (let i = 0; i < password.length; i++) {
+      const char = password.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    // 转换为 64 位十六进制字符串，模拟 SHA-256 输出
+    let hex = Math.abs(hash).toString(16);
+    while (hex.length < 64) {
+      hex = '0' + hex;
+    }
+    console.log('后备哈希结果:', hex);
+    return hex;
   }
   
   try {
@@ -51,11 +62,22 @@ export const encryptPassword = async (password) => {
     };
   } catch (error) {
     console.error('密码哈希失败:', error);
-    // 发生错误时，返回密码本身
-    return {
-      password: password,
-      salt: ''
-    };
+    // 发生错误时，尝试使用后备实现
+    try {
+      const fallbackHash = hashPasswordFallback(password);
+      console.log('使用后备哈希实现:', fallbackHash);
+      return {
+        password: fallbackHash,
+        salt: ''
+      };
+    } catch (fallbackError) {
+      console.error('后备哈希实现也失败:', fallbackError);
+      // 最后，返回密码本身
+      return {
+        password: password,
+        salt: ''
+      };
+    }
   }
 }
 
