@@ -235,12 +235,6 @@ def login():
             access_token = create_access_token(identity={'username': user.username, 'role': user.role})
             return jsonify(access_token=access_token, role=user.role, username=user.username, user_id=user.id)
         
-        # 尝试直接使用默认密码 'admin123' 进行验证（用于调试）
-        if data['password'] == 'admin123' or hash_password('admin123') == user.password:
-            print("密码匹配: 使用默认密码 'admin123'")
-            access_token = create_access_token(identity={'username': user.username, 'role': user.role})
-            return jsonify(access_token=access_token, role=user.role, username=user.username, user_id=user.id)
-        
         print("密码不匹配")
         return jsonify(message='用户名或密码错误'), 401
     except Exception as e:
