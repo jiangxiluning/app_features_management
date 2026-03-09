@@ -53,7 +53,7 @@ export const encryptPassword = async (password) => {
 }
 
 const api = axios.create({
-  baseURL: 'http://127.0.0.1:5001/api',
+  baseURL: '/api',
   timeout: 10000
 })
 
