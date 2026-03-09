@@ -1,77 +1,42 @@
 import axios from 'axios'
+import CryptoJS from 'crypto-js'
 
 // 密码哈希函数（使用 SHA-256 哈希）
 export const encryptPassword = async (password) => {
-  // 使用一个与后端 hashlib.sha256 兼容的 SHA-256 实现
-  function sha256(input) {
-    // 模拟 Python 的 hashlib.sha256 行为
-    const crypto = window.crypto || window.msCrypto;
-    if (crypto && crypto.subtle) {
-      return new Promise((resolve, reject) => {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(input);
-        console.log('密码编码后:', data);
-        crypto.subtle.digest('SHA-256', data)
-          .then(hashBuffer => {
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            console.log('哈希数组:', hashArray);
-            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-            console.log('哈希十六进制:', hashHex);
-            resolve(hashHex);
-          })
-          .catch(error => {
-            reject(error);
-          });
-      });
-    } else {
-      // 后备方案：使用与 Python hashlib.sha256 兼容的实现
-      // 这里使用一个简单的 SHA-256 实现，确保与后端兼容
-      console.log('使用后备哈希实现');
-      return hashPasswordFallback(input);
-    }
-  }
-  
-  // 后备哈希实现，确保与 Python hashlib.sha256 兼容
-  function hashPasswordFallback(password) {
-    // 这里使用一个简单的 SHA-256 实现
-    // 注意：这只是一个简化的实现，实际应用中应该使用更可靠的方法
-    let hash = 0;
-    for (let i = 0; i < password.length; i++) {
-      const char = password.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-    // 转换为 64 位十六进制字符串，模拟 SHA-256 输出
-    let hex = Math.abs(hash).toString(16);
-    while (hex.length < 64) {
-      hex = '0' + hex;
-    }
-    console.log('后备哈希结果:', hex);
-    return hex;
-  }
-  
+  // 使用 CryptoJS 库的 SHA-256 实现，确保与后端 hashlib.sha256 兼容
   try {
     console.log('原始密码:', password);
-    // 使用 SHA-256 哈希实现
-    const hashHex = await sha256(password);
-    console.log('最终哈希密码:', hashHex);
+    // 使用 CryptoJS 计算 SHA-256 哈希
+    const hash = CryptoJS.SHA256(password).toString();
+    console.log('CryptoJS 哈希结果:', hash);
     // 返回哈希后的密码
     return {
-      password: hashHex,
+      password: hash,
       salt: ''
     };
   } catch (error) {
     console.error('密码哈希失败:', error);
-    // 发生错误时，尝试使用后备实现
+    // 发生错误时，尝试使用 Web Crypto API
     try {
-      const fallbackHash = hashPasswordFallback(password);
-      console.log('使用后备哈希实现:', fallbackHash);
-      return {
-        password: fallbackHash,
-        salt: ''
-      };
-    } catch (fallbackError) {
-      console.error('后备哈希实现也失败:', fallbackError);
+      const crypto = window.crypto || window.msCrypto;
+      if (crypto && crypto.subtle) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(password);
+        console.log('密码编码后:', data);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        console.log('哈希数组:', hashArray);
+        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        console.log('Web Crypto API 哈希结果:', hashHex);
+        return {
+          password: hashHex,
+          salt: ''
+        };
+      } else {
+        throw new Error('Web Crypto API 不可用');
+      }
+    } catch (webCryptoError) {
+      console.error('Web Crypto API 哈希失败:', webCryptoError);
       // 最后，返回密码本身
       return {
         password: password,
