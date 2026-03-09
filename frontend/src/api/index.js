@@ -10,10 +10,13 @@ export const encryptPassword = async (password) => {
       return new Promise((resolve, reject) => {
         const encoder = new TextEncoder();
         const data = encoder.encode(input);
+        console.log('密码编码后:', data);
         crypto.subtle.digest('SHA-256', data)
           .then(hashBuffer => {
             const hashArray = Array.from(new Uint8Array(hashBuffer));
+            console.log('哈希数组:', hashArray);
             const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            console.log('哈希十六进制:', hashHex);
             resolve(hashHex);
           })
           .catch(error => {
@@ -30,13 +33,17 @@ export const encryptPassword = async (password) => {
         hash = ((hash << 5) - hash) + char;
         hash = hash & hash; // 转换为 32 位整数
       }
-      return hash.toString(16);
+      const hashHex = hash.toString(16);
+      console.log('使用后备哈希实现:', hashHex);
+      return hashHex;
     }
   }
   
   try {
+    console.log('原始密码:', password);
     // 使用 SHA-256 哈希实现
     const hashHex = await sha256(password);
+    console.log('最终哈希密码:', hashHex);
     // 返回哈希后的密码
     return {
       password: hashHex,
