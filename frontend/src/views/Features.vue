@@ -428,15 +428,8 @@
         </el-form-item>
         <el-form-item v-if="featureForm.node_type === 'function'" label="是否支持引导" prop="is_guide_supported">
           <div>
-            <el-checkbox 
-              :checked="featureForm.is_guide_supported === 'true'" 
-              @change="() => featureForm.is_guide_supported = 'true'"
-            >是</el-checkbox>
-            <el-checkbox 
-              :checked="featureForm.is_guide_supported === 'false'" 
-              @change="() => featureForm.is_guide_supported = 'false'"
-              style="margin-left: 20px"
-            >否</el-checkbox>
+            <el-radio v-model="featureForm.is_guide_supported" label="true">是</el-radio>
+            <el-radio v-model="featureForm.is_guide_supported" label="false" style="margin-left: 20px">否</el-radio>
           </div>
         </el-form-item>
         <el-form-item v-if="featureForm.node_type === 'function'" label="支持设备" prop="devices">
@@ -985,7 +978,7 @@ const rules = {
   }],
   is_guide_supported: [{ required: true, message: '请选择是否支持引导', trigger: 'change',
     validator: (rule, value, callback) => {
-      if (featureForm.node_type === 'function' && !value) {
+      if (featureForm.node_type === 'function' && (value === undefined || value === null || value === '')) {
         callback(new Error('请选择是否支持引导'))
       } else {
         callback()
@@ -1928,7 +1921,7 @@ const handleAddFunctionNode = (parentId) => {
   })
   featureForm.parent_id = parentId
   featureForm.node_type = 'function'
-  featureForm.is_guide_supported = false
+  featureForm.is_guide_supported = 'false'
   
   // 初始化动态字段
   initDynamicFields()
