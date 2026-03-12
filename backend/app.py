@@ -1019,6 +1019,9 @@ def delete_feature_recursive(feature):
         delete_feature_recursive(child)
     # 删除该节点的所有审核记录
     AuditLog.query.filter_by(feature_id=feature.id).delete()
+    # 如果是应用节点，删除关联的版本记录
+    if feature.node_type == 'app':
+        AppVersion.query.filter_by(app_id=feature.id).delete()
     db.session.delete(feature)
 
 @app.route('/api/features/<int:id>', methods=['DELETE'])
@@ -1107,6 +1110,9 @@ def delete_feature(id):
             # 递归删除子节点
             for child in feature.children:
                 delete_feature_recursive_no_audit(child)
+            # 如果是应用节点，删除关联的版本记录
+            if feature.node_type == 'app':
+                AppVersion.query.filter_by(app_id=feature.id).delete()
             # 只删除节点本身，不删除审核记录
             db.session.delete(feature)
         
