@@ -405,19 +405,21 @@
             </div>
           </div>
         </el-form-item>
-        <el-form-item v-if="featureForm.node_type === 'function'" label="版本范围" prop="version_range">
-          <el-row :gutter="20">
+        <el-form-item v-if="featureForm.node_type === 'function'" label="版本范围" prop="version_range" style="align-items: center;">
+          <el-row :gutter="20" style="align-items: center; width: 100%;">
             <el-col :span="16">
-              <el-input
-                v-model="featureForm.version_range"
-                placeholder="例如：>= 1.0.0 或 1.0.0 - 2.0.0"
-              ></el-input>
+              <el-tag v-if="featureForm.version_range" type="info" style="width: 100%; text-align: center; padding: 10px; font-size: 14px; height: 32px; display: flex; align-items: center; justify-content: center;">
+                {{ featureForm.version_range }}
+              </el-tag>
+              <el-tag v-else type="warning" style="width: 100%; text-align: center; padding: 10px; font-size: 14px; height: 32px; display: flex; align-items: center; justify-content: center;">
+                请选择版本范围
+              </el-tag>
             </el-col>
             <el-col :span="8">
               <el-button
                 type="primary"
                 @click="handleOpenVersionRangeDialog"
-                style="width: 100%"
+                style="width: auto; min-width: 100px;"
               >
                 选择版本范围
               </el-button>
@@ -523,8 +525,58 @@
         :rules="versionRules"
         label-width="100px"
       >
-        <el-form-item label="版本号" prop="version">
-          <el-input v-model="versionForm.version"></el-input>
+        <el-form-item label="版本号" prop="version" required>
+          <el-row :gutter="5" type="flex" align="middle">
+            <el-col :span="5">
+              <el-input
+                v-model="versionForm.major"
+                type="number"
+                placeholder="主版本"
+                :min="0"
+                :max="99999999"
+                @input="handleVersionInput"
+              ></el-input>
+            </el-col>
+            <el-col :span="1" style="text-align: center;">
+              .
+            </el-col>
+            <el-col :span="5">
+              <el-input
+                v-model="versionForm.minor"
+                type="number"
+                placeholder="次版本"
+                :min="0"
+                :max="99999999"
+                @input="handleVersionInput"
+              ></el-input>
+            </el-col>
+            <el-col :span="1" style="text-align: center;">
+              .
+            </el-col>
+            <el-col :span="5">
+              <el-input
+                v-model="versionForm.revision"
+                type="number"
+                placeholder="修订号"
+                :min="0"
+                :max="99999999"
+                @input="handleVersionInput"
+              ></el-input>
+            </el-col>
+            <el-col :span="1" style="text-align: center;">
+              .
+            </el-col>
+            <el-col :span="5">
+              <el-input
+                v-model="versionForm.build"
+                type="number"
+                placeholder="构建号"
+                :min="0"
+                :max="99999999"
+                @input="handleVersionInput"
+              ></el-input>
+            </el-col>
+          </el-row>
         </el-form-item>
         <el-form-item label="更新日志">
           <el-input
@@ -662,6 +714,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, h, nextTick } from 'vue'
 import { featureAPI, versionAPI, deviceAPI } from '../api'
+import api from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Minus } from '@element-plus/icons-vue'
 import { marked } from 'marked'
@@ -804,7 +857,7 @@ const featureForm = reactive({
   description: '',
   use_cases: '',
   videos: '',
-  version_range: '',
+  version_range: '>= 0.0.0.0',
   parent_id: null,
   node_type: 'function',
   is_guide_supported: false
@@ -815,10 +868,38 @@ const versionDialogVisible = ref(false)
 const versionFormRef = ref(null)
 const versionForm = reactive({
   version: '',
+  major: '',
+  minor: '',
+  revision: '',
+  build: '',
   changelog: ''
 })
 const versionRules = {
   version: [{ required: true, message: '请输入版本号', trigger: 'blur' }]
+}
+
+// 处理版本输入
+const handleVersionInput = () => {
+  // 确保每个字段都是数字且不为空
+  const major = parseInt(versionForm.major) || 0
+  const minor = parseInt(versionForm.minor) || 0
+  const revision = parseInt(versionForm.revision) || 0
+  const build = parseInt(versionForm.build) || 0
+  
+  // 限制最大值为99999999
+  const clampedMajor = Math.min(major, 99999999)
+  const clampedMinor = Math.min(minor, 99999999)
+  const clampedRevision = Math.min(revision, 99999999)
+  const clampedBuild = Math.min(build, 99999999)
+  
+  // 更新表单值
+  versionForm.major = clampedMajor.toString()
+  versionForm.minor = clampedMinor.toString()
+  versionForm.revision = clampedRevision.toString()
+  versionForm.build = clampedBuild.toString()
+  
+  // 更新版本号
+  versionForm.version = `${clampedMajor}.${clampedMinor}.${clampedRevision}.${clampedBuild}`
 }
 const appVersions = ref([])
 const currentAppId = ref(null)
@@ -1523,6 +1604,9 @@ const loadAppVersions = async (appId) => {
 const handleAddVersion = async () => {
   if (!versionFormRef.value) return
   
+  // 确保版本号已生成
+  handleVersionInput()
+  
   await versionFormRef.value.validate(async (valid) => {
     if (valid) {
       try {
@@ -1545,6 +1629,10 @@ const handleAddVersion = async () => {
         await loadAppVersions(currentAppId.value)
         // 重置表单
         versionForm.version = ''
+        versionForm.major = ''
+        versionForm.minor = ''
+        versionForm.revision = ''
+        versionForm.build = ''
         versionForm.changelog = ''
       } catch (error) {
         ElMessage.error(error.response?.data?.message || '版本添加失败')

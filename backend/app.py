@@ -239,12 +239,6 @@ def login():
             access_token = create_access_token(identity={'username': user.username, 'role': user.role})
             return jsonify(access_token=access_token, role=user.role, username=user.username, user_id=user.id)
         
-        # 尝试使用默认密码进行验证（仅用于调试）
-        if user.username == 'admin' and data['password'] == 'admin':
-            print("密码匹配: 使用默认密码 'admin'")
-            access_token = create_access_token(identity={'username': user.username, 'role': user.role})
-            return jsonify(access_token=access_token, role=user.role, username=user.username, user_id=user.id)
-        
         # 密码不匹配，返回错误
         print("密码不匹配")
         return jsonify(message='用户名或密码错误'), 401
@@ -814,6 +808,18 @@ def create_feature():
     )
     db.session.add(feature)
     db.session.flush()  # 获取feature.id
+    
+    # 如果创建的是应用节点，自动为其创建一个 0.0.0.0 版本号
+    if node_type == 'app':
+        # 检查是否已存在 0.0.0.0 版本
+        existing_version = AppVersion.query.filter_by(app_id=feature.id, version='0.0.0.0').first()
+        if not existing_version:
+            new_version = AppVersion(
+                app_id=feature.id,
+                version='0.0.0.0',
+                changelog='初始版本'
+            )
+            db.session.add(new_version)
     
     # 非管理员创建的需要审核
     if user_role != 'admin':
