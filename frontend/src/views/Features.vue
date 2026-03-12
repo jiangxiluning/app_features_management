@@ -430,11 +430,11 @@
           <div>
             <el-checkbox 
               :checked="featureForm.is_guide_supported === 'true'" 
-              @change="featureForm.is_guide_supported = 'true'"
+              @change="() => featureForm.is_guide_supported = 'true'"
             >是</el-checkbox>
             <el-checkbox 
               :checked="featureForm.is_guide_supported === 'false'" 
-              @change="featureForm.is_guide_supported = 'false'"
+              @change="() => featureForm.is_guide_supported = 'false'"
               style="margin-left: 20px"
             >否</el-checkbox>
           </div>
