@@ -176,17 +176,7 @@ with app.app_context():
         db.session.add(admin)
         db.session.commit()
 
-    # 创建默认根节点（应用名称）
-    if not Feature.query.filter_by(name='App').first():
-        app_feature = Feature(
-            name='App',
-            description='应用根节点',
-            version_range='All',
-            parent_id=None,
-            node_type='app'
-        )
-        db.session.add(app_feature)
-        db.session.commit()
+
 
 # 获取当前用户信息
 def get_current_user():
