@@ -427,10 +427,17 @@
           </el-row>
         </el-form-item>
         <el-form-item v-if="featureForm.node_type === 'function'" label="是否支持引导" prop="is_guide_supported">
-          <el-checkbox-group v-model="featureForm.is_guide_supported">
-            <el-checkbox label="true">是</el-checkbox>
-            <el-checkbox label="false">否</el-checkbox>
-          </el-checkbox-group>
+          <div>
+            <el-checkbox 
+              :checked="featureForm.is_guide_supported === 'true'" 
+              @change="featureForm.is_guide_supported = 'true'"
+            >是</el-checkbox>
+            <el-checkbox 
+              :checked="featureForm.is_guide_supported === 'false'" 
+              @change="featureForm.is_guide_supported = 'false'"
+              style="margin-left: 20px"
+            >否</el-checkbox>
+          </div>
         </el-form-item>
         <el-form-item v-if="featureForm.node_type === 'function'" label="支持设备" prop="devices">
           <el-checkbox v-model="selectAllDevices" @change="handleSelectAllDevices">所有设备</el-checkbox>
@@ -863,7 +870,7 @@ const featureForm = reactive({
   version_range: '>= 0.0.0.0',
   parent_id: null,
   node_type: 'function',
-  is_guide_supported: ['false']
+  is_guide_supported: 'false'
 })
 
 // 版本管理相关
@@ -978,7 +985,7 @@ const rules = {
   }],
   is_guide_supported: [{ required: true, message: '请选择是否支持引导', trigger: 'change',
     validator: (rule, value, callback) => {
-      if (featureForm.node_type === 'function' && (!value || value.length === 0)) {
+      if (featureForm.node_type === 'function' && !value) {
         callback(new Error('请选择是否支持引导'))
       } else {
         callback()
@@ -2022,14 +2029,14 @@ const handleEditFeature = (row) => {
     featureForm.parent_id = row.parent_id
     featureForm.node_type = row.node_type
     featureForm.version_range = row.version_range || 'All'
-    featureForm.is_guide_supported = ['false']
+    featureForm.is_guide_supported = 'false'
   } else {
     Object.assign(featureForm, row)
-    // 确保is_guide_supported字段存在并转换为数组形式
+    // 确保is_guide_supported字段存在并转换为字符串形式
     if (featureForm.is_guide_supported === undefined) {
-      featureForm.is_guide_supported = ['false']
+      featureForm.is_guide_supported = 'false'
     } else {
-      featureForm.is_guide_supported = [featureForm.is_guide_supported.toString()]
+      featureForm.is_guide_supported = featureForm.is_guide_supported.toString()
     }
   }
   
@@ -2064,8 +2071,8 @@ const handleSaveFeature = async () => {
       featureForm.devices = selectedDevices.value.join(',')
     }
     
-    // 处理是否支持引导字段，将数组转换为布尔值
-    featureForm.is_guide_supported = featureForm.is_guide_supported.includes('true')
+    // 处理是否支持引导字段，将字符串转换为布尔值
+    featureForm.is_guide_supported = featureForm.is_guide_supported === 'true'
   }
   
   // 添加用户信息和角色信息
