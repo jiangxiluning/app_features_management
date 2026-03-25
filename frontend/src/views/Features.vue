@@ -302,13 +302,7 @@
         :rules="rules"
         label-width="120px"
       >
-        <el-form-item label="节点类型" prop="node_type">
-          <el-select v-model="featureForm.node_type" disabled>
-            <el-option label="应用" value="app"></el-option>
-            <el-option label="分类" value="category"></el-option>
-            <el-option label="功能" value="function"></el-option>
-          </el-select>
-        </el-form-item>
+
         <el-form-item :label="featureForm.node_type === 'app' ? '应用名称' : featureForm.node_type === 'category' ? '分类名称' : '功能名称'" prop="name">
           <el-input v-model="featureForm.name"></el-input>
         </el-form-item>
