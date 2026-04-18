@@ -280,7 +280,8 @@
       <div class="context-menu-item-header" v-if="currentContextNode?.status === 'pending' && isAdmin">审核</div>
       <div class="context-menu-item" @click="handleContextMenuCommand('approve')" v-if="currentContextNode?.status === 'pending' && isAdmin">审核通过</div>
       <div class="context-menu-divider" v-if="currentContextNode?.node_type === 'app' && canExport"></div>
-      <div class="context-menu-item" @click="handleContextMenuCommand('export')" v-if="currentContextNode?.node_type === 'app' && canExport">导出</div>
+      <div class="context-menu-item" @click="handleContextMenuCommand('export')" v-if="currentContextNode?.node_type === 'app' && canExport">导出 markdown</div>
+      <div class="context-menu-item" @click="handleContextMenuCommand('exportJson')" v-if="currentContextNode?.node_type === 'app' && canExport">导出 json</div>
       <div class="context-menu-divider" v-if="currentContextNode?.node_type === 'app' && isAdmin"></div>
       <div class="context-menu-item-header" v-if="currentContextNode?.node_type === 'app' && isAdmin">版本管理</div>
       <div class="context-menu-item" @click="handleContextMenuCommand('manageVersions')" v-if="currentContextNode?.node_type === 'app' && isAdmin">管理版本</div>
@@ -1579,6 +1580,9 @@ const handleContextMenuCommand = (command) => {
     case 'export':
       handleExport(currentContextNode.value)
       break
+    case 'exportJson':
+      handleExportJson(currentContextNode.value)
+      break
     default:
       break
   }
@@ -2338,6 +2342,120 @@ const confirmExport = async () => {
   } finally {
     isExporting.value = false
     exportDialogVisible.value = false
+  }
+}
+
+// 导出JSON
+const handleExportJson = async (node) => {
+  if (!node || node.node_type !== 'app') return
+  
+  try {
+    const appId = node.id
+    const appName = node.name || 'app'
+    
+    // 构建功能列表
+    const functionsList = []
+    
+    // 重新处理，从children开始遍历
+    const appNode = findAppNode(featuresTree.value, appId)
+    if (appNode && appNode.children) {
+      const processChildren = (children, parentPath = '') => {
+        for (const child of children) {
+          if (child.node_type === 'category') {
+            if (child.children && child.children.length > 0) {
+              processChildren(child.children, parentPath ? `${parentPath}/${child.name}` : child.name)
+            }
+          } else if (child.node_type === 'function') {
+            // 处理 use_cases，确保是数组格式
+            let useCases = []
+            if (child.use_cases) {
+              if (typeof child.use_cases === 'string') {
+                if (isValidJSON(child.use_cases)) {
+                  try {
+                    const parsed = JSON.parse(child.use_cases)
+                    useCases = Array.isArray(parsed) ? parsed : []
+                  } catch (e) {
+                    // 按换行符分割成数组
+                    useCases = child.use_cases.split('\n').filter(c => c.trim())
+                  }
+                } else {
+                  // 按换行符分割成数组
+                  useCases = child.use_cases.split('\n').filter(c => c.trim())
+                }
+              } else if (Array.isArray(child.use_cases)) {
+                useCases = child.use_cases
+              }
+            }
+            
+            // 处理 is_guide_supported，确保是布尔值
+            let isGuideSupported = false
+            if (child.is_guide_supported) {
+              if (typeof child.is_guide_supported === 'string') {
+                isGuideSupported = child.is_guide_supported === 'true'
+              } else {
+                isGuideSupported = Boolean(child.is_guide_supported)
+              }
+            }
+            
+            // 处理 devices，转换为设备型号
+            let devices = []
+            if (child.devices) {
+              if (child.devices === 'all') {
+                devices = 'all'
+              } else if (typeof child.devices === 'string') {
+                const deviceIds = child.devices.split(',').filter(d => d.trim())
+                devices = deviceIds.map(id => {
+                  const device = availableDevices.value.find(d => d.id === parseInt(id))
+                  return device ? device.device_model : id
+                })
+              } else if (Array.isArray(child.devices)) {
+                devices = child.devices.map(id => {
+                  const device = availableDevices.value.find(d => d.id === parseInt(id))
+                  return device ? device.device_model : id
+                })
+              }
+            }
+            
+            // 处理 created_at，确保是 24 小时制
+            let formattedCreatedAt = child.created_at
+            if (child.created_at) {
+              try {
+                const date = new Date(child.created_at)
+                formattedCreatedAt = date.toISOString().replace('T', ' ').substring(0, 19)
+              } catch (e) {
+                // 如果解析失败，使用原始值
+              }
+            }
+            
+            const functionData = {
+              id: child.id,
+              name: child.name,
+              description: child.description,
+              use_cases: useCases,
+              videos: child.videos ? child.videos.split(',').filter(v => v.trim()) : [],
+              version_range: child.version_range,
+              is_guide_supported: isGuideSupported,
+              devices: devices,
+              created_at: formattedCreatedAt,
+              path: parentPath ? `${parentPath}/${child.name}` : child.name
+            }
+            functionsList.push(functionData)
+          }
+        }
+      }
+      processChildren(appNode.children)
+    }
+    
+    // 生成JSON字符串
+    const jsonContent = JSON.stringify(functionsList, null, 2)
+    
+    // 下载文件
+    downloadFile(jsonContent, `${appName}_功能导出.json`, 'application/json')
+    
+    ElMessage.success('成功导出功能为JSON文件')
+  } catch (error) {
+    console.error('导出JSON失败:', error)
+    ElMessage.error(error.message || '导出JSON失败，请稍后重试')
   }
 }
 
