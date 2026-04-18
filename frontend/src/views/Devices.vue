@@ -10,6 +10,7 @@
     <el-card>
       <el-table :data="devices" style="width: 100%">
         <el-table-column prop="id" label="ID" width="80"></el-table-column>
+        <el-table-column prop="device_model" label="设备型号"></el-table-column>
         <el-table-column prop="release_name" label="发布名称"></el-table-column>
         <el-table-column prop="description" label="设备描述"></el-table-column>
         <el-table-column prop="release_year" label="发布年份"></el-table-column>
@@ -35,6 +36,9 @@
         :rules="rules"
         label-width="100px"
       >
+        <el-form-item label="设备型号" prop="device_model">
+          <el-input v-model="deviceForm.device_model"></el-input>
+        </el-form-item>
         <el-form-item label="发布名称" prop="release_name">
           <el-input v-model="deviceForm.release_name"></el-input>
         </el-form-item>
@@ -71,14 +75,14 @@ const deviceFormRef = ref(null)
 const deviceForm = reactive({
   id: '',
   name: '',
+  device_model: '',
   description: '',
   release_name: '',
   release_year: new Date().getFullYear()
 })
 
 const rules = {
-  name: [{ required: true, message: '请输入设备名称', trigger: 'blur' }],
-  release_name: [{ required: true, message: '请输入发布名称', trigger: 'blur' }],
+  device_model: [{ required: true, message: '请输入设备型号', trigger: 'blur' }],
   release_year: [{ required: true, message: '请输入发布年份', trigger: 'blur' }]
 }
 
@@ -96,6 +100,7 @@ const loadDevices = async () => {
 const handleAddDevice = () => {
   deviceForm.id = ''
   deviceForm.name = ''
+  deviceForm.device_model = ''
   deviceForm.description = ''
   deviceForm.release_name = ''
   deviceForm.release_year = new Date().getFullYear()
@@ -107,6 +112,7 @@ const handleAddDevice = () => {
 const handleEditDevice = (device) => {
   deviceForm.id = device.id
   deviceForm.name = device.name
+  deviceForm.device_model = device.device_model
   deviceForm.description = device.description
   deviceForm.release_name = device.release_name
   deviceForm.release_year = device.release_year
@@ -118,14 +124,12 @@ const handleEditDevice = (device) => {
 const handleSaveDevice = async () => {
   if (!deviceFormRef.value) return
   
-  // 确保设备名称与发布名称相同
-  deviceForm.name = deviceForm.release_name
-  
   await deviceFormRef.value.validate(async (valid) => {
     if (valid) {
       try {
         const data = {
           name: deviceForm.name,
+          device_model: deviceForm.device_model,
           description: deviceForm.description,
           release_name: deviceForm.release_name,
           release_year: deviceForm.release_year,

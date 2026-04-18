@@ -438,7 +438,7 @@
             <el-option
               v-for="device in availableDevices"
               :key="device.id"
-              :label="device.release_name"
+              :label="device.device_model"
               :value="device.id"
             ></el-option>
           </el-select>
@@ -790,7 +790,7 @@ const templateSemantics = ref([
   { template: '{{version_range}}', semantic: '版本范围' },
   { template: '{{is_guide_supported}}', semantic: '是否支持引导' },
   { template: '{{#devices}}...{{/devices}}', semantic: '支持设备列表' },
-  { template: '{{device_name}}', semantic: '设备名称' }
+  { template: '{{device_model}}', semantic: '设备型号' }
 ])
 const exportTemplate = ref(`# 功能名称
 {{name}}
@@ -818,7 +818,7 @@ const exportTemplate = ref(`# 功能名称
 
 # 支持设备
 {{#devices}}
-{{device_name}}
+{{device_model}}
 {{/devices}}`)
 const isExporting = ref(false)
 // 移动确认对话框
@@ -2244,7 +2244,7 @@ const getUseCaseTypeLabel = (type) => {
 // 根据设备ID获取设备发布名称和年份
 const getDeviceName = (deviceId) => {
   const device = availableDevices.value.find(d => d.id === deviceId)
-  return device ? `${device.release_name} ${device.release_year}` : `设备${deviceId}`
+  return device ? `${device.device_model} ${device.release_year}` : `设备${deviceId}`
 }
 
 // 格式化设备列表
@@ -2396,13 +2396,55 @@ const generateMarkdown = (feature, template, featuresTree) => {
   content = content.replace(/\{\{created_at\}\}/g, feature.created_at || '无')
   content = content.replace(/\{\{updated_at\}\}/g, feature.updated_at || '无')
   
-  // 处理use_cases多值字段
+  // 处理 use_cases多值字段
   content = processMultiValueField(content, 'use_cases', feature.use_cases)
-  
+
   // 处理videos多值字段
   content = processMultiValueField(content, 'videos', feature.videos)
-  
+
+  // 处理devices多值字段
+  content = processDevicesField(content, feature.devices)
+
   return content
+}
+
+// 处理设备多值字段
+const processDevicesField = (content, devicesValue) => {
+  const regex = /\{\{#devices\}\}(.*?)\{\{\/devices\}\}/s
+
+  if (!devicesValue || devicesValue === 'all') {
+    return content.replace(regex, '所有设备')
+  }
+
+  let deviceIds = []
+  if (typeof devicesValue === 'string') {
+    deviceIds = devicesValue.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id))
+  } else if (Array.isArray(devicesValue)) {
+    deviceIds = devicesValue
+  }
+
+  if (deviceIds.length === 0) {
+    return content.replace(regex, '无')
+  }
+
+  const match = content.match(regex)
+  if (!match) {
+    return content
+  }
+
+  const template = match[1]
+  let renderedContent = ''
+
+  for (let i = 0; i < deviceIds.length; i++) {
+    let itemContent = template
+    const device = availableDevices.value.find(d => d.id === deviceIds[i])
+    const deviceModel = device ? device.device_model : `设备${deviceIds[i]}`
+    itemContent = itemContent.replace(/\{\{index\}\}/g, i)
+    itemContent = itemContent.replace(/\{\{device_model\}\}/g, deviceModel)
+    renderedContent += itemContent
+  }
+
+  return content.replace(regex, renderedContent)
 }
 
 // 计算祖先路径

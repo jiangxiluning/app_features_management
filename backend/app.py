@@ -128,9 +128,10 @@ class Feature(db.Model):
 
 class Device(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), unique=True, nullable=False)
+    name = db.Column(db.String(100), nullable=True)
+    device_model = db.Column(db.String(100), unique=True, nullable=False)
     description = db.Column(db.Text, nullable=True)
-    release_name = db.Column(db.String(100), nullable=False)
+    release_name = db.Column(db.String(100), nullable=True)
     release_year = db.Column(db.Integer, nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=True)
@@ -1331,6 +1332,7 @@ def get_devices():
     return jsonify([{
         'id': device.id,
         'name': device.name,
+        'device_model': device.device_model,
         'description': device.description,
         'release_name': device.release_name,
         'release_year': device.release_year,
@@ -1348,14 +1350,20 @@ def create_device():
     if user_role != 'admin':
         return jsonify(message='只有管理员可以添加设备'), 403
     
-    # 检查设备名称是否已存在
-    if Device.query.filter_by(name=data['name']).first():
-        return jsonify(message='设备名称已存在'), 400
+    # 检查设备型号是否已存在
+    if Device.query.filter_by(device_model=data['device_model']).first():
+        return jsonify(message='设备型号已存在'), 400
+    
+    # 检查设备名称是否已存在（如果提供了名称）
+    if 'name' in data and data['name']:
+        if Device.query.filter_by(name=data['name']).first():
+            return jsonify(message='设备名称已存在'), 400
     
     device = Device(
-        name=data['name'],
+        name=data.get('name'),
+        device_model=data['device_model'],
         description=data.get('description'),
-        release_name=data['release_name'],
+        release_name=data.get('release_name'),
         release_year=data['release_year']
     )
     db.session.add(device)
@@ -1376,12 +1384,19 @@ def update_device(id):
     if user_role != 'admin':
         return jsonify(message='只有管理员可以修改设备'), 403
     
-    # 检查设备名称是否已存在（排除当前设备）
+    # 检查设备型号是否已存在（排除当前设备）
+    if 'device_model' in data and data['device_model'] != device.device_model:
+        if Device.query.filter_by(device_model=data['device_model']).filter(Device.id != id).first():
+            return jsonify(message='设备型号已存在'), 400
+    
+    # 检查设备名称是否已存在（如果提供了名称且与当前名称不同）
     if 'name' in data and data['name'] != device.name:
-        if Device.query.filter_by(name=data['name']).filter(Device.id != id).first():
-            return jsonify(message='设备名称已存在'), 400
+        if data['name']:
+            if Device.query.filter_by(name=data['name']).filter(Device.id != id).first():
+                return jsonify(message='设备名称已存在'), 400
     
     device.name = data.get('name', device.name)
+    device.device_model = data.get('device_model', device.device_model)
     device.description = data.get('description', device.description)
     device.release_name = data.get('release_name', device.release_name)
     device.release_year = data.get('release_year', device.release_year)
@@ -1812,10 +1827,12 @@ def export_features(app_id):
                             for device in devices:
                                 # 为每个device生成内容，使用用户定义的模板
                                 device_content = device_template.replace('{{device_name}}', f"{device.release_name} {device.release_year}")
+                                device_content = device_content.replace('{{device_model}}', device.device_model)
                                 devices_content += device_content
                         else:
                             # 所有设备
                             device_content = device_template.replace('{{device_name}}', "所有设备")
+                            device_content = device_content.replace('{{device_model}}', "所有设备")
                             devices_content = device_content
                         # 替换devices部分
                         markdown_content = markdown_content.replace(devices_section, devices_content)
