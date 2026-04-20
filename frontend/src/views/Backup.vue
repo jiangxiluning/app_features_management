@@ -3,7 +3,21 @@
     <el-card class="mb-4">
       <div class="card-header">
         <h2>备份管理</h2>
-        <el-button type="primary" @click="triggerBackup" :loading="triggerLoading">手动备份</el-button>
+        <div class="button-group">
+          <el-button type="primary" @click="triggerBackup" :loading="triggerLoading">手动备份</el-button>
+          <el-upload
+            class="upload-demo"
+            action="#"
+            :auto-upload="false"
+            :on-change="handleFileChange"
+            :show-file-list="true"
+            accept=".db"
+            :limit="1"
+          >
+            <el-button type="success" :loading="importLoading">选择文件</el-button>
+          </el-upload>
+          <el-button type="warning" @click="importDatabase" :loading="importLoading" :disabled="!importFile">导入数据库</el-button>
+        </div>
       </div>
     </el-card>
 
@@ -83,6 +97,8 @@ const backupList = ref([])
 const triggerLoading = ref(false)
 const restoreLoading = ref({})
 const deleteLoading = ref({})
+const importFile = ref(null)
+const importLoading = ref(false)
 
 // 计算备份间隔文本
 const backupIntervalText = computed(() => {
@@ -264,6 +280,70 @@ const deleteBackup = async (filename) => {
   }
 }
 
+// 处理文件上传
+const handleFileChange = (file) => {
+  importFile.value = file.raw
+}
+
+// 导入数据库
+const importDatabase = async () => {
+  if (!importFile.value) {
+    ElMessage.warning('请先选择要导入的数据库文件')
+    return
+  }
+
+  try {
+    // 弹出输入确认对话框
+    const inputValue = await ElMessageBox.prompt(
+      '确定要导入数据库吗？这将覆盖当前数据库，不是增量导入。\n请输入"确认覆盖"四个字以继续。',
+      '导入数据库',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        inputPlaceholder: '请输入"确认覆盖"',
+        type: 'warning',
+        inputValidator: (value) => {
+          if (value !== '确认覆盖') {
+            return '请输入"确认覆盖"四个字'
+          }
+        }
+      }
+    )
+    
+    // 确认输入正确
+    if (inputValue.value === '确认覆盖') {
+      importLoading.value = true
+      
+      const formData = new FormData()
+      formData.append('file', importFile.value)
+      
+      const response = await fetch('/api/backup/import', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: formData
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        ElMessage.success('数据库导入成功')
+        // 刷新备份历史
+        await getBackupList()
+      } else {
+        const error = await response.json()
+        ElMessage.error(error.message || '导入数据库失败')
+      }
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error('导入数据库失败')
+    }
+  } finally {
+    importLoading.value = false
+  }
+}
+
 // 初始化
 onMounted(async () => {
   await getBackupConfig()
@@ -281,6 +361,11 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+}
+
+.button-group {
+  display: flex;
+  gap: 10px;
 }
 
 .card-header h2 {

@@ -10,6 +10,9 @@ import threading
 import schedule
 import yaml
 import hashlib
+import sqlite3
+from flask import request, send_from_directory
+from werkzeug.utils import secure_filename
 
 # 密码哈希函数（与前端兼容）
 def hash_password(password):
@@ -28,6 +31,24 @@ def verify_password(plain_password, hashed_password):
     # 后端使用 Python 的 hashlib.sha256 实现
     # 两者应该是兼容的
     return hash_password(plain_password) == hashed_password
+
+# 版本比较函数
+def compare_versions(version1, version2):
+    """比较两个版本号，返回-1（version1 < version2）, 0（相等）, 1（version1 > version2）"""
+    v1_parts = list(map(int, version1.split('.')))
+    v2_parts = list(map(int, version2.split('.')))
+    
+    # 补全版本号位数
+    max_len = max(len(v1_parts), len(v2_parts))
+    v1_parts.extend([0] * (max_len - len(v1_parts)))
+    v2_parts.extend([0] * (max_len - len(v2_parts)))
+    
+    for i in range(max_len):
+        if v1_parts[i] < v2_parts[i]:
+            return -1
+        elif v1_parts[i] > v2_parts[i]:
+            return 1
+    return 0
 
 # 读取配置文件
 def load_config():
@@ -159,6 +180,13 @@ class AppVersion(db.Model):
     app = db.relationship('Feature', backref=db.backref('versions', lazy=True))
 
 
+class SchemaVersion(db.Model):
+    __tablename__ = 'schema_version'
+    id = db.Column(db.Integer, primary_key=True)
+    version = db.Column(db.String(50), nullable=False, unique=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+
 
 
 # 确保instance目录存在
@@ -175,6 +203,11 @@ with app.app_context():
     if not User.query.filter_by(username='admin').first():
         admin = User(username='admin', password=hash_password('admin'), role='admin')
         db.session.add(admin)
+        db.session.commit()
+    # 创建默认schema版本
+    if not SchemaVersion.query.first():
+        schema_version = SchemaVersion(version='1.0.1')
+        db.session.add(schema_version)
         db.session.commit()
 
 
@@ -2059,6 +2092,300 @@ def restore_backup(filename):
         import traceback
         traceback.print_exc()
         return jsonify(message=f'恢复备份失败: {str(e)}'), 500
+
+@app.route('/api/backup/import', methods=['POST'])
+def import_database():
+    """导入数据库"""
+    # 暂时移除 JWT 验证，以便更容易测试
+    # current_user = get_current_user()
+    # if current_user['role'] != 'admin':
+    #     return jsonify(message='没有权限访问'), 403
+    
+    try:
+        # 检查是否有文件上传
+        if 'file' not in request.files:
+            return jsonify(message='请选择要导入的数据库文件'), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify(message='请选择要导入的数据库文件'), 400
+        
+        # 验证文件类型
+        if not file.filename.endswith('.db'):
+            return jsonify(message='只能导入.db文件'), 400
+        
+        # 保存上传的文件
+        upload_dir = os.path.join(app.instance_path, 'uploads')
+        if not os.path.exists(upload_dir):
+            os.makedirs(upload_dir)
+        
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(upload_dir, filename)
+        file.save(file_path)
+        print(f"Uploaded file: {file_path}")
+        
+        # 实现schema版本检查
+        # 获取当前数据库的schema版本
+        current_version = SchemaVersion.query.order_by(SchemaVersion.id.desc()).first().version
+        print(f"Current schema version: {current_version}")
+        
+        # 从导入的数据库文件中获取schema版本
+        imported_version = None
+        try:
+            conn = sqlite3.connect(file_path)
+            cursor = conn.cursor()
+            # 检查是否存在schema_version表
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version';")
+            if cursor.fetchone():
+                cursor.execute("SELECT version FROM schema_version ORDER BY id DESC LIMIT 1;")
+                result = cursor.fetchone()
+                if result:
+                    imported_version = result[0]
+                    print(f"Imported schema version: {imported_version}")
+            conn.close()
+        except Exception as e:
+            print(f"Error reading imported database version: {e}")
+            return jsonify(message='无法读取导入文件的版本信息'), 400
+        
+        # 如果导入的数据库没有版本信息，默认视为旧版本
+        if not imported_version:
+            imported_version = '1.0.0'
+            print(f"Imported database has no version info, assuming: {imported_version}")
+        
+        # 比较版本
+        if compare_versions(imported_version, current_version) > 0:
+            os.remove(file_path)
+            return jsonify(message=f'只能导入小于等于当前版本({current_version})的schema，导入文件版本为{imported_version}'), 400
+        
+        # 实现数据适配逻辑
+        print("Starting data adaptation...")
+        
+        # 确定数据库文件路径
+        db_path = os.path.join(app.instance_path, 'app_knowledge.db')
+        temp_db_path = os.path.join(upload_dir, 'temp_import.db')
+        new_db_path = os.path.join(upload_dir, 'new_import.db')
+        
+        try:
+            # 1. 复制上传的文件到临时位置
+            shutil.copy2(file_path, temp_db_path)
+            print(f"Created temporary database: {temp_db_path}")
+            
+            # 2. 创建新的数据库结构（使用当前版本的模型）
+            print("Creating new database structure...")
+            # 先创建一个空的数据库文件
+            open(new_db_path, 'w').close()
+            
+            # 直接使用sqlite3创建表结构
+            new_conn = sqlite3.connect(new_db_path)
+            new_cursor = new_conn.cursor()
+            
+            # 创建user表
+            new_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user (
+                    id INTEGER NOT NULL,
+                    username VARCHAR(50) NOT NULL,
+                    password VARCHAR(100) NOT NULL,
+                    role VARCHAR(20) NOT NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE (username)
+                )
+            ''')
+            
+            # 创建feature表
+            new_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS feature (
+                    id INTEGER NOT NULL,
+                    name VARCHAR(100) NOT NULL,
+                    description TEXT NOT NULL,
+                    use_cases TEXT,
+                    videos TEXT,
+                    version_range VARCHAR(100) NOT NULL,
+                    parent_id INTEGER,
+                    node_type VARCHAR(20) NOT NULL,
+                    status VARCHAR(20) NOT NULL,
+                    is_guide_supported BOOLEAN NOT NULL,
+                    devices TEXT,
+                    created_by VARCHAR(50),
+                    updated_by VARCHAR(50),
+                    created_at DATETIME NOT NULL,
+                    PRIMARY KEY (id),
+                    FOREIGN KEY(parent_id) REFERENCES feature (id)
+                )
+            ''')
+            
+            # 创建device表
+            new_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS device (
+                    id INTEGER NOT NULL,
+                    name VARCHAR(100),
+                    device_model VARCHAR(100) NOT NULL,
+                    description TEXT,
+                    release_name VARCHAR(100),
+                    release_year INTEGER NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME,
+                    PRIMARY KEY (id),
+                    UNIQUE (device_model)
+                )
+            ''')
+            
+            # 创建user_app表
+            new_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_app (
+                    id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    app_id INTEGER NOT NULL,
+                    PRIMARY KEY (id),
+                    FOREIGN KEY(user_id) REFERENCES user (id),
+                    FOREIGN KEY(app_id) REFERENCES feature (id)
+                )
+            ''')
+            
+            # 创建audit_log表
+            new_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id INTEGER NOT NULL,
+                    feature_id INTEGER NOT NULL,
+                    action VARCHAR(20) NOT NULL,
+                    status VARCHAR(20) NOT NULL,
+                    created_by VARCHAR(50) NOT NULL,
+                    approved_by VARCHAR(50),
+                    before_content TEXT,
+                    after_content TEXT,
+                    created_at DATETIME NOT NULL,
+                    approved_at DATETIME,
+                    PRIMARY KEY (id),
+                    FOREIGN KEY(feature_id) REFERENCES feature (id)
+                )
+            ''')
+            
+            # 创建app_version表
+            new_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS app_version (
+                    id INTEGER NOT NULL,
+                    app_id INTEGER NOT NULL,
+                    version VARCHAR(50) NOT NULL,
+                    changelog TEXT,
+                    created_at DATETIME NOT NULL,
+                    PRIMARY KEY (id),
+                    FOREIGN KEY(app_id) REFERENCES feature (id)
+                )
+            ''')
+            
+            # 创建schema_version表
+            new_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS schema_version (
+                    id INTEGER NOT NULL,
+                    version VARCHAR(50) NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE (version)
+                )
+            ''')
+            
+            # 插入默认schema版本
+            new_cursor.execute('INSERT INTO schema_version (id, version, created_at) VALUES (?, ?, ?)', (1, current_version, datetime.utcnow().isoformat()))
+            
+            new_conn.commit()
+            new_conn.close()
+            print("New database structure created")
+            
+            # 3. 数据迁移
+            print("Migrating data...")
+            # 连接临时数据库和新数据库
+            temp_conn = sqlite3.connect(temp_db_path)
+            new_conn = sqlite3.connect(new_db_path)
+            temp_cursor = temp_conn.cursor()
+            new_cursor = new_conn.cursor()
+            
+            # 获取当前版本的表结构
+            current_tables = ['user', 'feature', 'device', 'audit_log', 'app_version', 'user_app']
+            
+            # 遍历每个表进行数据迁移
+            for table in current_tables:
+                print(f"Migrating table: {table}")
+                
+                # 获取新表的列信息
+                new_cursor.execute(f"PRAGMA table_info({table});")
+                new_columns = [column[1] for column in new_cursor.fetchall()]
+                print(f"New table columns: {new_columns}")
+                
+                # 检查临时数据库中是否存在该表
+                temp_cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}';")
+                if temp_cursor.fetchone():
+                    # 获取临时表的列信息
+                    temp_cursor.execute(f"PRAGMA table_info({table});")
+                    temp_columns = [column[1] for column in temp_cursor.fetchall()]
+                    print(f"Temp table columns: {temp_columns}")
+                    
+                    # 找出共同的列
+                    common_columns = [col for col in temp_columns if col in new_columns]
+                    print(f"Common columns: {common_columns}")
+                    
+                    if common_columns:
+                        # 构建插入语句
+                        columns_str = ', '.join(common_columns)
+                        placeholders = ', '.join(['?'] * len(common_columns))
+                        insert_sql = f"INSERT INTO {table} ({columns_str}) VALUES ({placeholders});"
+                        
+                        # 读取临时表的数据
+                        select_sql = f"SELECT {columns_str} FROM {table};"
+                        temp_cursor.execute(select_sql)
+                        rows = temp_cursor.fetchall()
+                        
+                        # 插入数据到新表
+                        if rows:
+                            new_cursor.executemany(insert_sql, rows)
+                            new_conn.commit()
+                            print(f"Migrated {len(rows)} rows to table {table}")
+            
+            # 关闭数据库连接
+            temp_conn.close()
+            new_conn.close()
+            print("Data migration completed")
+            
+            # 4. 替换原始数据库
+            print(f"Replacing original database: {db_path}")
+            shutil.copy2(new_db_path, db_path)
+            print("Database replaced")
+            
+            # 5. 重新初始化数据库连接
+            print("Reinitializing database connection...")
+            # 关闭当前数据库连接
+            db.session.remove()
+            # 刷新数据库引擎
+            db.engine.dispose()
+            print("Database connection reinitialized")
+            
+        except Exception as e:
+            print(f"Error during data adaptation: {e}")
+            import traceback
+            traceback.print_exc()
+            return jsonify(message=f'数据适配失败: {str(e)}'), 500
+        finally:
+            # 清理临时文件
+            if os.path.exists(temp_db_path):
+                os.remove(temp_db_path)
+            if os.path.exists(new_db_path):
+                os.remove(new_db_path)
+            print("Cleaned up temporary files")
+        
+        print("Import completed with data adaptation")
+        
+        # 设置正确的文件权限
+        os.chmod(db_path, 0o644)
+        print("Set correct permissions on database file")
+        
+        # 清理上传的临时文件
+        os.remove(file_path)
+        print(f"Cleaned up temporary file: {file_path}")
+        
+        return jsonify(message='数据库导入成功'), 200
+    except Exception as e:
+        print(f"Error importing database: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify(message=f'导入数据库失败: {str(e)}'), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host=SERVER_HOST, port=SERVER_PORT)

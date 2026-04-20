@@ -1,7 +1,7 @@
 # 后端服务器配置
 server:
   host: 0.0.0.0
-  port: 5001
+  port: 5002
 
 # 备份配置
 backup:
