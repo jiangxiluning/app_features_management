@@ -771,8 +771,6 @@ def create_feature():
             return jsonify(message='版本范围是必选项'), 400
         if 'is_guide_supported' not in data:
             return jsonify(message='是否支持引导是必选项'), 400
-        if not data.get('devices'):
-            return jsonify(message='支持设备是必选项'), 400
     
     # 权限检查：只有管理员可以添加应用节点
     if node_type == 'app' and user_role != 'admin':
@@ -902,8 +900,6 @@ def update_feature(id):
             return jsonify(message='版本范围是必选项'), 400
         if 'is_guide_supported' in data and data['is_guide_supported'] is None:
             return jsonify(message='是否支持引导是必选项'), 400
-        if 'devices' in data and not data['devices']:
-            return jsonify(message='支持设备是必选项'), 400
     
     # 验证功能节点不能是根节点
     parent_id = data.get('parent_id', feature.parent_id)

@@ -131,9 +131,8 @@
                       <el-descriptions-item label="是否支持引导">
                         {{ (selectedFeature.is_guide_supported === true || selectedFeature.is_guide_supported === 'true') ? '是' : '否' }}
                       </el-descriptions-item>
-                      <el-descriptions-item label="支持设备">
-                        <div v-if="selectedFeature.devices === 'all'">所有设备</div>
-                        <div v-else-if="selectedFeature.devices">
+                      <el-descriptions-item label="不支持设备">
+                        <div v-if="selectedFeature.devices">
                           <el-tag v-for="deviceId in selectedFeature.devices.split(',')" :key="deviceId" size="small" style="margin-right: 5px;">
                             {{ getDeviceName(parseInt(deviceId)) }}
                           </el-tag>
@@ -226,9 +225,8 @@
                 <el-descriptions-item label="是否支持引导">
                   {{ (selectedFeature.is_guide_supported === true || selectedFeature.is_guide_supported === 'true') ? '是' : '否' }}
                 </el-descriptions-item>
-                <el-descriptions-item label="支持设备">
-                  <div v-if="selectedFeature.devices === 'all'">所有设备</div>
-                  <div v-else-if="selectedFeature.devices">
+                <el-descriptions-item label="不支持设备">
+                  <div v-if="selectedFeature.devices">
                     <el-tag v-for="deviceId in selectedFeature.devices.split(',')" :key="deviceId" size="small" style="margin-right: 5px;">
                       {{ getDeviceName(parseInt(deviceId)) }}
                     </el-tag>
@@ -427,14 +425,12 @@
             <el-radio v-model="featureForm.is_guide_supported" label="false" style="margin-left: 20px">否</el-radio>
           </div>
         </el-form-item>
-        <el-form-item v-if="featureForm.node_type === 'function'" label="支持设备" prop="devices">
-          <el-checkbox v-model="selectAllDevices" @change="handleSelectAllDevices">所有设备</el-checkbox>
+        <el-form-item v-if="featureForm.node_type === 'function'" label="不支持设备">
           <el-select
             v-model="selectedDevices"
             multiple
-            placeholder="请选择支持的设备"
-            style="width: 100%; margin-top: 10px"
-            :disabled="selectAllDevices"
+            placeholder="请选择不支持的设备"
+            style="width: 100%"
           >
             <el-option
               v-for="device in availableDevices"
@@ -790,7 +786,7 @@ const templateSemantics = ref([
   { template: '{{url}}', semantic: '视频链接' },
   { template: '{{version_range}}', semantic: '版本范围' },
   { template: '{{is_guide_supported}}', semantic: '是否支持引导' },
-  { template: '{{#devices}}...{{/devices}}', semantic: '支持设备列表' },
+  { template: '{{#devices}}...{{/devices}}', semantic: '不支持设备列表' },
   { template: '{{device_model}}', semantic: '设备型号' }
 ])
 const exportTemplate = ref(`# 功能名称
@@ -817,7 +813,7 @@ const exportTemplate = ref(`# 功能名称
 # 是否支持引导
 {{is_guide_supported}}
 
-# 支持设备
+# 不支持设备
 {{#devices}}
 {{device_model}}
 {{/devices}}`)
@@ -979,15 +975,6 @@ const rules = {
         callback()
       }
     }
-  }],
-  devices: [{ required: true, message: '请选择支持设备', trigger: 'change',
-    validator: (rule, value, callback) => {
-      if (featureForm.node_type === 'function' && !value && selectedDevices.value.length === 0 && !selectAllDevices.value) {
-        callback(new Error('请选择支持设备'))
-      } else {
-        callback()
-      }
-    }
   }]
 }
 
@@ -1118,11 +1105,11 @@ const comparisonData = computed(() => {
       after: (selectedFeature.value.is_guide_supported === true || selectedFeature.value.is_guide_supported === 'true') ? '是' : '否'
     })
     
-    // 添加支持设备字段
+    // 添加不支持设备字段
     data.push({
-      field: '支持设备',
-      before: oldFeatureData.value.devices === 'all' ? '所有设备' : formatDeviceList(oldFeatureData.value.devices),
-      after: selectedFeature.value.devices === 'all' ? '所有设备' : formatDeviceList(selectedFeature.value.devices)
+      field: '不支持设备',
+      before: formatDeviceList(oldFeatureData.value.devices),
+      after: formatDeviceList(selectedFeature.value.devices)
     })
   }
   
@@ -1994,14 +1981,9 @@ const initDynamicFields = () => {
   
   // 初始化设备选择
   if (featureForm.node_type === 'function') {
-    if (featureForm.devices === 'all') {
-      selectAllDevices.value = true
-      selectedDevices.value = []
-    } else if (featureForm.devices) {
-      selectAllDevices.value = false
+    if (featureForm.devices) {
       selectedDevices.value = featureForm.devices.split(',').map(id => parseInt(id)).filter(id => !isNaN(id))
     } else {
-      selectAllDevices.value = false
       selectedDevices.value = []
     }
   }
@@ -2041,6 +2023,18 @@ const handleEditFeature = (row) => {
 const handleSaveFeature = async () => {
   if (!featureFormRef.value) return
   
+  // 添加用户信息和角色信息
+  let username = 'user'
+  let userRole = 'developer'
+  let user_id = '1'
+  try {
+    username = localStorage.getItem('username') || 'user'
+    userRole = localStorage.getItem('role') || 'developer'
+    user_id = localStorage.getItem('user_id') || '1'
+  } catch (error) {
+    console.error('Error getting localStorage:', error)
+  }
+  
   // 转换动态字段为字符串格式
   if (featureForm.node_type === 'function') {
     // 转换使用案例为简单的字符串格式
@@ -2056,26 +2050,10 @@ const handleSaveFeature = async () => {
       .join(',')
     
     // 处理设备字段
-    if (selectAllDevices.value) {
-      featureForm.devices = 'all'
-    } else {
-      featureForm.devices = selectedDevices.value.join(',')
-    }
+    featureForm.devices = selectedDevices.value.join(',')
     
     // 处理是否支持引导字段，将字符串转换为布尔值
     featureForm.is_guide_supported = featureForm.is_guide_supported === 'true'
-  }
-  
-  // 添加用户信息和角色信息
-  let username = 'user'
-  let userRole = 'developer'
-  let user_id = '1'
-  try {
-    username = localStorage.getItem('username') || 'user'
-    userRole = localStorage.getItem('role') || 'developer'
-    user_id = localStorage.getItem('user_id') || '1'
-  } catch (error) {
-    console.error('Error getting localStorage:', error)
   }
   
   await featureFormRef.value.validate(async (valid) => {
@@ -2400,9 +2378,7 @@ const handleExportJson = async (node) => {
             // 处理 devices，转换为设备型号
             let devices = []
             if (child.devices) {
-              if (child.devices === 'all') {
-                devices = 'all'
-              } else if (typeof child.devices === 'string') {
+              if (typeof child.devices === 'string') {
                 const deviceIds = child.devices.split(',').filter(d => d.trim())
                 devices = deviceIds.map(id => {
                   const device = availableDevices.value.find(d => d.id === parseInt(id))
@@ -2435,7 +2411,7 @@ const handleExportJson = async (node) => {
               videos: child.videos ? child.videos.split(',').filter(v => v.trim()) : [],
               version_range: child.version_range,
               is_guide_supported: isGuideSupported,
-              devices: devices,
+              unsupported_devices: devices,
               created_at: formattedCreatedAt,
               path: parentPath ? `${parentPath}/${child.name}` : child.name
             }
