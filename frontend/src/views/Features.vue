@@ -2406,9 +2406,6 @@ const handleExportJson = async (node) => {
             const functionData = {
               id: child.id,
               name: child.name,
-              description: child.description,
-              use_cases: useCases,
-              videos: child.videos ? child.videos.split(',').filter(v => v.trim()) : [],
               version_range: child.version_range,
               is_guide_supported: isGuideSupported,
               unsupported_devices: devices,
