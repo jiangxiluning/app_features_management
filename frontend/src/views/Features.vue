@@ -278,8 +278,8 @@
       <div class="context-menu-item-header" v-if="currentContextNode?.status === 'pending' && isAdmin">审核</div>
       <div class="context-menu-item" @click="handleContextMenuCommand('approve')" v-if="currentContextNode?.status === 'pending' && isAdmin">审核通过</div>
       <div class="context-menu-divider" v-if="currentContextNode?.node_type === 'app' && canExport"></div>
-      <div class="context-menu-item" @click="handleContextMenuCommand('export')" v-if="currentContextNode?.node_type === 'app' && canExport">导出 markdown</div>
-      <div class="context-menu-item" @click="handleContextMenuCommand('exportJson')" v-if="currentContextNode?.node_type === 'app' && canExport">导出 json</div>
+      <div class="context-menu-item" @click="handleContextMenuCommand('export')" v-if="currentContextNode?.node_type === 'app' && canExport">导出知识描述文件</div>
+      <div class="context-menu-item" @click="handleContextMenuCommand('exportJson')" v-if="currentContextNode?.node_type === 'app' && canExport">导出功能属性文件</div>
       <div class="context-menu-divider" v-if="currentContextNode?.node_type === 'app' && isAdmin"></div>
       <div class="context-menu-item-header" v-if="currentContextNode?.node_type === 'app' && isAdmin">版本管理</div>
       <div class="context-menu-item" @click="handleContextMenuCommand('manageVersions')" v-if="currentContextNode?.node_type === 'app' && isAdmin">管理版本</div>
