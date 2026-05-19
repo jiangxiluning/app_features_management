@@ -17,6 +17,21 @@
       <!-- 左侧树形结构 -->
       <div class="tree-panel" :style="{ width: treeWidth + '%' }">
         <el-card class="tree-container">
+          <div class="search-container">
+            <el-input
+              v-model="searchQuery"
+              placeholder="搜索功能名称"
+              clearable
+              class="search-input"
+            >
+              <template #prefix>
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <path d="m21 21-4.35-4.35"></path>
+                </svg>
+              </template>
+            </el-input>
+          </div>
           <h3>功能树</h3>
           <el-tree
             :data="filteredFeaturesTree"
@@ -729,39 +744,75 @@ const selectedFeature = ref(null)
 const auditLogs = ref([])
 const oldFeatureData = ref({})
 const guideOnly = ref(false)
+const searchQuery = ref('')
 
 const filteredFeaturesTree = computed(() => {
-  if (!guideOnly.value) {
-    return featuresTree.value
-  }
+  let result = featuresTree.value
   
-  const filterTree = (nodes, isTopLevel = true) => {
-    return nodes
-      .map(node => {
-        let filteredChildren = []
-        if (node.children && node.children.length > 0) {
-          filteredChildren = filterTree(node.children, false)
-        }
-        
-        if (node.node_type === 'function') {
-          if (node.is_guide_supported === true || node.is_guide_supported === 'true') {
+  if (guideOnly.value) {
+    const filterByGuide = (nodes) => {
+      return nodes
+        .map(node => {
+          let filteredChildren = []
+          if (node.children && node.children.length > 0) {
+            filteredChildren = filterByGuide(node.children)
+          }
+          
+          if (node.node_type === 'function') {
+            if (node.is_guide_supported === true || node.is_guide_supported === 'true') {
+              return { ...node, children: filteredChildren }
+            }
+            return null
+          } else if (node.node_type === 'category') {
+            if (filteredChildren.length > 0) {
+              return { ...node, children: filteredChildren }
+            }
+            return null
+          } else if (node.node_type === 'app') {
             return { ...node, children: filteredChildren }
           }
           return null
-        } else if (node.node_type === 'category') {
-          if (filteredChildren.length > 0) {
-            return { ...node, children: filteredChildren }
-          }
-          return null
-        } else if (node.node_type === 'app') {
-          return { ...node, children: filteredChildren }
-        }
-        return null
-      })
-      .filter(node => node !== null)
+        })
+        .filter(node => node !== null)
+    }
+    result = filterByGuide(result)
   }
   
-  return filterTree(featuresTree.value, true)
+  if (searchQuery.value.trim()) {
+    const query = searchQuery.value.trim().toLowerCase()
+    const filterBySearch = (nodes) => {
+      return nodes
+        .map(node => {
+          let filteredChildren = []
+          if (node.children && node.children.length > 0) {
+            filteredChildren = filterBySearch(node.children)
+          }
+          
+          if (node.node_type === 'function') {
+            const nodeName = (node.name || '').toLowerCase()
+            if (nodeName.includes(query)) {
+              return { ...node, children: filteredChildren }
+            }
+            return null
+          } else if (node.node_type === 'category') {
+            if (filteredChildren.length > 0) {
+              return { ...node, children: filteredChildren }
+            }
+            return null
+          } else if (node.node_type === 'app') {
+            if (filteredChildren.length > 0) {
+              return { ...node, children: filteredChildren }
+            }
+            return null
+          }
+          return null
+        })
+        .filter(node => node !== null)
+    }
+    result = filterBySearch(result)
+  }
+  
+  return result
 })
 
 // 检查用户角色
@@ -2816,6 +2867,14 @@ const handleClose = (done) => {
 .tree-container :deep(.el-tree) {
   flex: 1;
   overflow-y: auto;
+}
+
+.search-container {
+  margin-bottom: 15px;
+}
+
+.search-input {
+  width: 100%;
 }
 
 .tree-container h3 {
