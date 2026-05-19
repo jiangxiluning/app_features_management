@@ -278,6 +278,7 @@
       @click.stop
     >
       <div class="context-menu-item" @click="handleContextMenuCommand('edit')" v-if="currentContextNode?.node_type !== 'app'">编辑</div>
+      <div class="context-menu-item" @click="handleContextMenuCommand('copy')" v-if="currentContextNode?.node_type === 'function'">复制</div>
       <div class="context-menu-item" @click="handleContextMenuCommand('delete')">删除</div>
       <div class="context-menu-divider" v-if="currentContextNode?.node_type !== 'app'"></div>
       <div class="context-menu-item-header" v-if="currentContextNode?.node_type !== 'app'">移动</div>
@@ -1587,6 +1588,9 @@ const handleContextMenuCommand = (command) => {
     case 'edit':
       handleEditFeature(currentContextNode.value)
       break
+    case 'copy':
+      handleCopyFeature(currentContextNode.value)
+      break
     case 'delete':
       handleDeleteFeature(currentContextNode.value.id)
       break
@@ -2055,6 +2059,35 @@ const handleEditFeature = (row) => {
     } else {
       featureForm.is_guide_supported = featureForm.is_guide_supported.toString()
     }
+  }
+  
+  // 初始化动态字段
+  initDynamicFields()
+  
+  dialogVisible.value = true
+}
+
+// 复制功能节点
+const handleCopyFeature = (row) => {
+  dialogTitle.value = '复制功能节点'
+  Object.keys(featureForm).forEach(key => {
+    featureForm[key] = ''
+  })
+  
+  // 复制功能节点的所有属性
+  Object.assign(featureForm, row)
+  
+  // 修改名称为原名称 + " 副本"
+  featureForm.name = row.name + ' 副本'
+  
+  // 清除id，确保创建新节点
+  featureForm.id = ''
+  
+  // 确保is_guide_supported字段存在并转换为字符串形式
+  if (featureForm.is_guide_supported === undefined) {
+    featureForm.is_guide_supported = 'false'
+  } else {
+    featureForm.is_guide_supported = featureForm.is_guide_supported.toString()
   }
   
   // 初始化动态字段
