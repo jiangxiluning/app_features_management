@@ -734,33 +734,33 @@ const filteredFeaturesTree = computed(() => {
     return featuresTree.value
   }
   
-  const filterTree = (nodes) => {
+  const filterTree = (nodes, isTopLevel = true) => {
     return nodes
       .map(node => {
         let filteredChildren = []
         if (node.children && node.children.length > 0) {
-          filteredChildren = filterTree(node.children)
+          filteredChildren = filterTree(node.children, false)
         }
-        
-        const hasGuideFunction = filteredChildren.length > 0 || 
-          (node.node_type === 'function' && (node.is_guide_supported === true || node.is_guide_supported === 'true'))
         
         if (node.node_type === 'function') {
           if (node.is_guide_supported === true || node.is_guide_supported === 'true') {
             return { ...node, children: filteredChildren }
           }
           return null
-        } else {
-          if (hasGuideFunction) {
+        } else if (node.node_type === 'category') {
+          if (filteredChildren.length > 0) {
             return { ...node, children: filteredChildren }
           }
           return null
+        } else if (node.node_type === 'app') {
+          return { ...node, children: filteredChildren }
         }
+        return null
       })
       .filter(node => node !== null)
   }
   
-  return filterTree(featuresTree.value)
+  return filterTree(featuresTree.value, true)
 })
 
 // 检查用户角色
