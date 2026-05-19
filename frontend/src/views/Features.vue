@@ -3,7 +3,13 @@
     <el-card class="mb-4">
       <div class="card-header">
         <h2>功能管理</h2>
-        <el-button type="primary" @click="handleAddAppNode" v-if="isAdmin">添加应用节点</el-button>
+        <div class="header-right">
+          <el-switch
+            v-model="guideOnly"
+            active-text="只显示支持引导的功能"
+          ></el-switch>
+          <el-button type="primary" @click="handleAddAppNode" v-if="isAdmin">添加应用节点</el-button>
+        </div>
       </div>
     </el-card>
 
@@ -13,7 +19,7 @@
         <el-card class="tree-container">
           <h3>功能树</h3>
           <el-tree
-            :data="featuresTree"
+            :data="filteredFeaturesTree"
             node-key="id"
             :props="treeProps"
             :default-expand-all="false"
@@ -35,6 +41,9 @@
                 <span class="node-emoji">{{ data.node_type === 'app' ? '💻' : data.node_type === 'category' ? '📁' : '🛠️' }}</span>
                 <span>{{ data.name }}</span>
                 <span class="node-status status-{{ data.status }}">{{ data.status === 'pending' ? ' ❓' : '' }}</span>
+                <span class="node-count" v-if="data.node_type === 'app' || data.node_type === 'category'">
+                  ({{ getFunctionCount(data) }})
+                </span>
               </span>
             </template>
           </el-tree>
@@ -718,6 +727,41 @@ const featuresTree = ref([])
 const selectedFeature = ref(null)
 const auditLogs = ref([])
 const oldFeatureData = ref({})
+const guideOnly = ref(false)
+
+const filteredFeaturesTree = computed(() => {
+  if (!guideOnly.value) {
+    return featuresTree.value
+  }
+  
+  const filterTree = (nodes) => {
+    return nodes
+      .map(node => {
+        let filteredChildren = []
+        if (node.children && node.children.length > 0) {
+          filteredChildren = filterTree(node.children)
+        }
+        
+        const hasGuideFunction = filteredChildren.length > 0 || 
+          (node.node_type === 'function' && (node.is_guide_supported === true || node.is_guide_supported === 'true'))
+        
+        if (node.node_type === 'function') {
+          if (node.is_guide_supported === true || node.is_guide_supported === 'true') {
+            return { ...node, children: filteredChildren }
+          }
+          return null
+        } else {
+          if (hasGuideFunction) {
+            return { ...node, children: filteredChildren }
+          }
+          return null
+        }
+      })
+      .filter(node => node !== null)
+  }
+  
+  return filterTree(featuresTree.value)
+})
 
 // 检查用户角色
 const isAdmin = computed(() => {
@@ -2229,6 +2273,28 @@ const getDeviceName = (deviceId) => {
   return device ? `${device.device_model} ${device.release_year}` : `设备${deviceId}`
 }
 
+const getFunctionCount = (node) => {
+  if (!node || !node.children || node.children.length === 0) {
+    return 0
+  }
+  
+  let count = 0
+  const traverse = (children) => {
+    for (const child of children) {
+      if (child.node_type === 'function') {
+        if (!guideOnly.value || (child.is_guide_supported === true || child.is_guide_supported === 'true')) {
+          count++
+        }
+      } else if (child.children && child.children.length > 0) {
+        traverse(child.children)
+      }
+    }
+  }
+  
+  traverse(node.children)
+  return count
+}
+
 // 格式化设备列表
 const formatDeviceList = (devicesStr) => {
   if (!devicesStr) return '无'
@@ -2668,6 +2734,12 @@ const handleClose = (done) => {
   margin-bottom: 20px;
 }
 
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
 .card-header h2 {
   margin: 0;
   font-size: 18px;
@@ -2847,6 +2919,12 @@ const handleClose = (done) => {
 
 .tree-node .node-status {
   margin-left: 8px;
+}
+
+.tree-node .node-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: #909399;
 }
 
 .status-pending {
