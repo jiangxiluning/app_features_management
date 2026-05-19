@@ -40,7 +40,7 @@
             :default-expand-all="false"
             :expand-on-click-node="false"
             :auto-expand-parent="false"
-            :default-expanded-keys="expandedKeys"
+            :default-expanded-keys="getExpandedKeys"
             @node-click="handleNodeClick"
             @node-expand="handleNodeExpand"
             @node-collapse="handleNodeCollapse"
@@ -844,6 +844,23 @@ const isDragging = ref(false)
 
 // 展开的节点ID数组
 const expandedKeys = ref([])
+
+const getExpandedKeys = computed(() => {
+  if (searchQuery.value.trim()) {
+    const keys = []
+    const collectKeys = (nodes) => {
+      nodes.forEach(node => {
+        keys.push(node.id)
+        if (node.children && node.children.length > 0) {
+          collectKeys(node.children)
+        }
+      })
+    }
+    collectKeys(filteredFeaturesTree.value)
+    return keys
+  }
+  return expandedKeys.value
+})
 
 // 对话框相关
 const dialogVisible = ref(false)
