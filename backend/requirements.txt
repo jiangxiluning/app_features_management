@@ -5,3 +5,5 @@ python-dotenv
 Flask-Cors
 schedule
 pyyaml
+openai
+httpx

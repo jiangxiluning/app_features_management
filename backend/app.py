@@ -92,6 +92,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'supersecretkey1234567890abcdefghijklmnopqrstuvwxyz'
 app.config['JWT_SECRET_KEY'] = 'supersecretkey1234567890abcdefghijklmnopqrstuvwxyz'
 app.config['JWT_ERROR_MESSAGE_KEY'] = 'message'
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = False  # 开发环境禁用Token过期，方便测试
 import os
 # 使用绝对路径来指定数据库文件的位置
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(os.path.dirname(__file__), 'instance', 'app_knowledge.db')
@@ -187,6 +188,41 @@ class SchemaVersion(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
 
+class LLMConfig(db.Model):
+    __tablename__ = 'llm_config'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False, default='default')
+    base_url = db.Column(db.Text, nullable=False)
+    api_key = db.Column(db.Text, nullable=False)
+    model_name = db.Column(db.String(100), nullable=False)
+    enable_search = db.Column(db.Boolean, nullable=False, default=False)
+    system_prompt = db.Column(db.Text, nullable=True)
+    user_prompt = db.Column(db.Text, nullable=True)
+    http_proxy = db.Column(db.Text, nullable=True)
+    https_proxy = db.Column(db.Text, nullable=True)
+    no_proxy = db.Column(db.Boolean, nullable=False, default=False)  # 新增：不使用代理
+    same_proxy = db.Column(db.Boolean, nullable=False, default=False)  # 新增：HTTP和HTTPS代理一致
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'base_url': self.base_url,
+            'model_name': self.model_name,
+            'enable_search': self.enable_search,
+            'system_prompt': self.system_prompt,
+            'user_prompt': self.user_prompt,
+            'http_proxy': self.http_proxy,
+            'https_proxy': self.https_proxy,
+            'no_proxy': self.no_proxy,
+            'same_proxy': self.same_proxy,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
 
 
 # 确保instance目录存在
@@ -199,6 +235,28 @@ if not os.path.exists(instance_dir):
 # 创建数据库
 with app.app_context():
     db.create_all()
+    
+    # 尝试添加新字段（兼容性处理）
+    try:
+        # 使用 SQLite 原始 SQL 添加新字段（如果不存在）
+        from sqlalchemy import inspect
+        inspector = inspect(db.engine)
+        columns = [col['name'] for col in inspector.get_columns('llm_config')]
+        
+        if 'no_proxy' not in columns:
+            with db.engine.connect() as conn:
+                conn.execute(db.text('ALTER TABLE llm_config ADD COLUMN no_proxy BOOLEAN DEFAULT 0'))
+                conn.commit()
+                print('Added no_proxy column')
+        
+        if 'same_proxy' not in columns:
+            with db.engine.connect() as conn:
+                conn.execute(db.text('ALTER TABLE llm_config ADD COLUMN same_proxy BOOLEAN DEFAULT 0'))
+                conn.commit()
+                print('Added same_proxy column')
+    except Exception as e:
+        print(f'Database schema update: {e}')
+    
     # 创建默认管理员用户
     if not User.query.filter_by(username='admin').first():
         admin = User(username='admin', password=hash_password('admin'), role='admin')
@@ -209,12 +267,63 @@ with app.app_context():
         schema_version = SchemaVersion(version='1.0.1')
         db.session.add(schema_version)
         db.session.commit()
+    # 创建默认LLM配置（只有在表存在的情况下）
+    try:
+        if not LLMConfig.query.first():
+            default_llm_config = LLMConfig(
+                name='default',
+                base_url='https://api.openai.com/v1',
+                api_key='',
+                model_name='gpt-3.5-turbo',
+                enable_search=False,
+                system_prompt='你是一个专业的功能描述优化助手，帮助用户完善功能描述内容。',
+                user_prompt='请优化以下功能描述，使其更加清晰、专业、完整：\n应用名称：{{app_name}}\n应用描述：{{app_description}}\n功能名称：{{feature_name}}\n功能描述：{{feature_description}}',
+                no_proxy=False,
+                same_proxy=False
+            )
+            db.session.add(default_llm_config)
+            db.session.commit()
+            print('Created default LLM config')
+        else:
+            # 确保现有配置有新字段
+            config = LLMConfig.query.first()
+            if not hasattr(config, 'no_proxy'):
+                # 尝试直接更新数据库（使用原始 SQL）
+                try:
+                    with db.engine.connect() as conn:
+                        conn.execute(db.text('UPDATE llm_config SET no_proxy = 0 WHERE no_proxy IS NULL'))
+                        conn.execute(db.text('UPDATE llm_config SET same_proxy = 0 WHERE same_proxy IS NULL'))
+                        conn.commit()
+                except:
+                    pass
+    except Exception as e:
+        # 如果表不存在，忽略错误
+        print(f'Could not create default LLM config: {e}')
 
 
+
+# 导入 get_jwt
+from flask_jwt_extended import get_jwt
 
 # 获取当前用户信息
 def get_current_user():
+    # 从 JWT claims 中获取用户信息
+    try:
+        claims = get_jwt()
+        if 'role' in claims and 'user_id' in claims:
+            identity = get_jwt_identity()
+            return {
+                'username': identity,
+                'role': claims['role'],
+                'user_id': claims['user_id']
+            }
+    except:
+        pass
+    
+    # 兼容旧格式
     identity = get_jwt_identity()
+    if isinstance(identity, dict):
+        return identity
     return identity
 
 # API路由
@@ -248,7 +357,11 @@ def login():
         # 前端已经对密码进行了哈希处理，直接比较哈希值
         if user.password == data['password']:
             print("密码匹配: 前端发送的是哈希值")
-            access_token = create_access_token(identity={'username': user.username, 'role': user.role})
+            # 使用 identity=用户名（字符串），并使用 additional_claims 传递额外信息
+            access_token = create_access_token(
+                identity=user.username,
+                additional_claims={'role': user.role, 'user_id': user.id}
+            )
             return jsonify(access_token=access_token, role=user.role, username=user.username, user_id=user.id)
         
         # 尝试使用前端的哈希方法验证密码
@@ -260,7 +373,10 @@ def login():
         print(f"尝试将前端密码视为明文，哈希后: {hashed_password}")
         if hashed_password == user.password:
             print("密码匹配: 前端发送的是明文")
-            access_token = create_access_token(identity={'username': user.username, 'role': user.role})
+            access_token = create_access_token(
+                identity=user.username,
+                additional_claims={'role': user.role, 'user_id': user.id}
+            )
             return jsonify(access_token=access_token, role=user.role, username=user.username, user_id=user.id)
         
         # 密码不匹配，返回错误
@@ -2382,6 +2498,171 @@ def import_database():
         import traceback
         traceback.print_exc()
         return jsonify(message=f'导入数据库失败: {str(e)}'), 500
+
+
+# ============================================
+# 大模型相关API
+# ============================================
+
+# 导入服务（移到API函数内部，避免在初始化时导入失败）
+
+
+@app.route('/api/llm/config', methods=['GET'])
+@jwt_required()
+def get_llm_config():
+    """获取LLM配置"""
+    try:
+        # 检查权限
+        identity = get_jwt_identity()
+        print(f"DEBUG - Raw identity from JWT: {identity}, type: {type(identity)}")
+        
+        # 兼容两种格式：旧的字典格式和新的字符串格式
+        if isinstance(identity, dict):
+            # 旧格式：直接使用
+            user_info = identity
+        else:
+            # 新格式：通过 get_current_user() 获取
+            user_info = get_current_user()
+        
+        print(f"DEBUG - User info: {user_info}")
+        
+        if not user_info or user_info.get('role') != 'admin':
+            return jsonify(message='只有管理员可以访问'), 403
+        
+        config = LLMConfig.query.first()
+        if config:
+            return jsonify(config.to_dict())
+        else:
+            return jsonify(message='未找到配置'), 404
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify(message=f'获取配置失败: {str(e)}'), 500
+
+
+@app.route('/api/llm/config', methods=['POST'])
+@jwt_required()
+def save_llm_config():
+    """保存LLM配置"""
+    try:
+        # 检查权限
+        identity = get_current_user()
+        print(f"DEBUG - save config identity: {identity}")
+        if not identity or identity.get('role') != 'admin':
+            return jsonify(message='只有管理员可以访问'), 403
+        
+        data = request.get_json()
+        
+        # 检查是否已存在配置
+        config = LLMConfig.query.first()
+        if not config:
+            config = LLMConfig()
+        
+        # 更新配置
+        config.name = data.get('name', 'default')
+        config.base_url = data.get('base_url', '')
+        config.api_key = data.get('api_key', '')
+        config.model_name = data.get('model_name', '')
+        config.enable_search = data.get('enable_search', False)
+        config.system_prompt = data.get('system_prompt', '')
+        config.user_prompt = data.get('user_prompt', '')
+        config.http_proxy = data.get('http_proxy', '')
+        config.https_proxy = data.get('https_proxy', '')
+        config.no_proxy = data.get('no_proxy', False)
+        config.same_proxy = data.get('same_proxy', False)
+        
+        db.session.add(config)
+        db.session.commit()
+        
+        return jsonify(message='配置保存成功', config=config.to_dict())
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        db.session.rollback()
+        return jsonify(message=f'保存配置失败: {str(e)}'), 500
+
+
+@app.route('/api/llm/test', methods=['POST'])
+@jwt_required()
+def test_llm_connection():
+    """测试LLM连接"""
+    try:
+        # 检查权限
+        identity = get_current_user()
+        print(f"DEBUG - test connection identity: {identity}")
+        if not identity or identity.get('role') != 'admin':
+            return jsonify(message='只有管理员可以访问'), 403
+        
+        # 导入服务
+        from services.llm_service import LLMService
+        
+        # 获取配置
+        config = LLMConfig.query.first()
+        if not config:
+            return jsonify(message='请先配置大模型'), 400
+        
+        if not config.api_key or not config.base_url:
+            return jsonify(message='请先配置API Key和Base URL'), 400
+        
+        # 测试连接
+        llm_service = LLMService(config)
+        success, message = llm_service.test_connection()
+        
+        if success:
+            return jsonify(message=message, success=True)
+        else:
+            return jsonify(message=message, success=False), 400
+    except Exception as e:
+        return jsonify(message=f'测试连接失败: {str(e)}'), 500
+
+
+@app.route('/api/llm/optimize', methods=['POST'])
+@jwt_required()
+def optimize_description():
+    """优化功能描述"""
+    try:
+        data = request.get_json()
+        feature_id = data.get('feature_id')
+        
+        if not feature_id:
+            return jsonify(message='功能ID不能为空'), 400
+        
+        # 获取功能
+        feature = Feature.query.get(feature_id)
+        if not feature:
+            return jsonify(message='功能不存在'), 404
+        
+        # 获取LLM配置
+        config = LLMConfig.query.first()
+        if not config:
+            return jsonify(message='请先配置大模型'), 400
+        
+        if not config.api_key or not config.base_url:
+            return jsonify(message='请先配置API Key和Base URL'), 400
+        
+        # 导入服务
+        from services.llm_service import LLMService
+        from services.prompt_service import PromptService
+        
+        # 构建上下文
+        context = PromptService.get_optimization_context(feature)
+        
+        # 渲染prompt
+        system_prompt = PromptService.render_prompt(config.system_prompt, context)
+        user_prompt = PromptService.render_prompt(config.user_prompt, context)
+        
+        # 调用大模型
+        llm_service = LLMService(config)
+        optimized_description = llm_service.optimize_description(system_prompt, user_prompt)
+        
+        return jsonify(
+            message='优化成功',
+            original_description=feature.description,
+            optimized_description=optimized_description
+        )
+    except Exception as e:
+        return jsonify(message=f'优化失败: {str(e)}'), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True, host=SERVER_HOST, port=SERVER_PORT)

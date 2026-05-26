@@ -54,6 +54,11 @@ const routes = [
         path: 'devices',
         name: 'devices',
         component: () => import('../views/Devices.vue')
+      },
+      {
+        path: 'llm',
+        name: 'llm',
+        component: () => import('../views/LLMManagement.vue')
       }
     ]
   }

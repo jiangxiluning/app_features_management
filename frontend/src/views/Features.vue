@@ -293,6 +293,7 @@
       @click.stop
     >
       <div class="context-menu-item" @click="handleContextMenuCommand('edit')" v-if="currentContextNode?.node_type !== 'app'">编辑</div>
+      <div class="context-menu-item" @click="handleContextMenuCommand('editAppDescription')" v-if="currentContextNode?.node_type === 'app'">修改应用描述</div>
       <div class="context-menu-item" @click="handleContextMenuCommand('copy')" v-if="currentContextNode?.node_type === 'function'">复制</div>
       <div class="context-menu-item" @click="handleContextMenuCommand('delete')">删除</div>
       <div class="context-menu-divider" v-if="currentContextNode?.node_type !== 'app'"></div>
@@ -331,6 +332,18 @@
           <el-input v-model="featureForm.name"></el-input>
         </el-form-item>
         <el-form-item :label="featureForm.node_type === 'app' ? '应用描述' : featureForm.node_type === 'category' ? '分类描述' : '功能描述'" prop="description">
+          <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+            <el-button 
+              type="primary" 
+              size="small" 
+              @click="optimizeDescription" 
+              :loading="optimizing"
+              :disabled="!selectedFeature || !featureForm.description"
+            >
+              <el-icon><i-ep-magic-stick /></el-icon>
+              智慧优化
+            </el-button>
+          </div>
           <el-tabs v-model="activeTab">
             <el-tab-pane label="编辑" name="edit">
               <el-input
@@ -725,6 +738,42 @@
         </span>
       </template>
     </el-dialog>
+    
+    <!-- 优化结果对比对话框 -->
+    <el-dialog
+      v-model="optimizeDialogVisible"
+      title="优化结果对比"
+      width="80%"
+    >
+      <el-row :gutter="20">
+        <el-col :span="12">
+          <el-card>
+            <template #header>
+              <div class="card-header">
+                <span>原始内容</span>
+              </div>
+            </template>
+            <div class="markdown-preview" v-html="marked(originalDescription)"></div>
+          </el-card>
+        </el-col>
+        <el-col :span="12">
+          <el-card>
+            <template #header>
+              <div class="card-header">
+                <span>优化后内容</span>
+              </div>
+            </template>
+            <div class="markdown-preview" v-html="marked(optimizedDescription)"></div>
+          </el-card>
+        </el-col>
+      </el-row>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="optimizeDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="applyOptimization">应用优化</el-button>
+        </span>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -732,7 +781,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, h, nextTick } from 'vue'
-import { featureAPI, versionAPI, deviceAPI } from '../api'
+import { featureAPI, versionAPI, deviceAPI, llmAPI } from '../api'
 import api from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Minus } from '@element-plus/icons-vue'
@@ -902,6 +951,42 @@ const templateSemantics = ref([
   { template: '{{#devices}}...{{/devices}}', semantic: '不支持设备列表' },
   { template: '{{device_model}}', semantic: '设备型号' }
 ])
+const optimizeDialogVisible = ref(false)
+const optimizing = ref(false)
+const originalDescription = ref('')
+const optimizedDescription = ref('')
+
+const optimizeDescription = async () => {
+  if (!selectedFeature.value) {
+    ElMessage.warning('请先选择一个功能')
+    return
+  }
+  
+  if (!featureForm.description) {
+    ElMessage.warning('请先输入功能描述')
+    return
+  }
+  
+  optimizing.value = true
+  try {
+    const response = await llmAPI.optimizeDescription(selectedFeature.value.id)
+    originalDescription.value = featureForm.description
+    optimizedDescription.value = response.data.optimized_description
+    ElMessage.success(response.data.message || '优化成功')
+    optimizeDialogVisible.value = true
+  } catch (error) {
+    ElMessage.error('优化失败: ' + (error.response?.data?.message || error.message))
+  } finally {
+    optimizing.value = false
+  }
+}
+
+const applyOptimization = () => {
+  featureForm.description = optimizedDescription.value
+  optimizeDialogVisible.value = false
+  ElMessage.success('已应用优化结果')
+}
+
 const exportTemplate = ref(`# 功能名称
 {{name}}
 
@@ -1654,6 +1739,9 @@ const handleContextMenuCommand = (command) => {
   
   switch (command) {
     case 'edit':
+      handleEditFeature(currentContextNode.value)
+      break
+    case 'editAppDescription':
       handleEditFeature(currentContextNode.value)
       break
     case 'copy':

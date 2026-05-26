@@ -145,4 +145,12 @@ export const deviceAPI = {
   deleteDevice: (id, data) => api.delete(`/devices/${id}`, { data })
 }
 
+// 大模型相关
+export const llmAPI = {
+  getConfig: () => api.get('/llm/config'),
+  saveConfig: (data) => api.post('/llm/config', data),
+  testConnection: () => api.post('/llm/test'),
+  optimizeDescription: (featureId) => api.post('/llm/optimize', { feature_id: featureId })
+}
+
 export default api

@@ -39,6 +39,10 @@
             <el-icon><i-ep-monitor /></el-icon>
             <span>设备管理</span>
           </el-menu-item>
+          <el-menu-item index="/llm" v-if="isAdmin">
+            <el-icon><i-ep-magic-stick /></el-icon>
+            <span>大模型配置</span>
+          </el-menu-item>
         </el-menu>
       </el-aside>
       <el-container>
