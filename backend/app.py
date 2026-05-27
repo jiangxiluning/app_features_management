@@ -2650,6 +2650,10 @@ def optimize_description():
         system_prompt = PromptService.render_prompt(config.system_prompt, context)
         user_prompt = PromptService.render_prompt(config.user_prompt, context)
         
+        # 打印大模型调用信息
+        print(f"DEBUG - 大模型调用 - 系统提示词:\n{system_prompt}")
+        print(f"DEBUG - 大模型调用 - 用户提示词:\n{user_prompt}")
+        
         # 调用大模型
         llm_service = LLMService(config)
         optimized_description = llm_service.optimize_description(system_prompt, user_prompt)

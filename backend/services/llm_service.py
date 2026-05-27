@@ -76,6 +76,9 @@ class LLMService:
         if self.config.enable_search:
             extra_body["enable_search"] = True
         
+        print(f"DEBUG - LLM优化描述 - 模型: {self.config.model_name}")
+        print(f"DEBUG - LLM优化描述 - 开启搜索: {self.config.enable_search}")
+        
         completion = self.client.chat.completions.create(
             model=self.config.model_name,
             messages=[
@@ -85,7 +88,10 @@ class LLMService:
             extra_body=extra_body
         )
         
-        return completion.choices[0].message.content
+        result = completion.choices[0].message.content
+        print(f"DEBUG - LLM优化描述 - 优化结果:\n{result}")
+        
+        return result
     
     def test_connection(self):
         """
