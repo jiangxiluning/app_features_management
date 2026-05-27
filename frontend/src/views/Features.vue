@@ -332,26 +332,28 @@
           <el-input v-model="featureForm.name"></el-input>
         </el-form-item>
         <el-form-item :label="featureForm.node_type === 'app' ? '应用描述' : featureForm.node_type === 'category' ? '分类描述' : '功能描述'" prop="description">
-          <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-            <el-button 
-              type="primary" 
-              size="small" 
-              @click="optimizeDescription" 
-              :loading="optimizing"
-              :disabled="!selectedFeature || !featureForm.description"
-            >
-              <el-icon><i-ep-magic-stick /></el-icon>
-              智慧优化
-            </el-button>
-          </div>
           <el-tabs v-model="activeTab">
             <el-tab-pane label="编辑" name="edit">
-              <el-input
-                type="textarea"
-                v-model="featureForm.description"
-                :rows="10"
-                placeholder="请输入功能描述（支持 Markdown 格式）"
-              ></el-input>
+              <div style="position: relative;">
+                <el-input
+                  type="textarea"
+                  v-model="featureForm.description"
+                  :rows="10"
+                  placeholder="请输入功能描述（支持 Markdown 格式）"
+                ></el-input>
+                <el-button
+                  type="primary"
+                  size="small"
+                  circle
+                  @click="optimizeDescription"
+                  :loading="optimizing"
+                  :disabled="!selectedFeature || !featureForm.description"
+                  style="position: absolute; top: 8px; right: 8px; z-index: 10;"
+                  title="智慧优化"
+                >
+                  <el-icon><i-ep-magic-stick /></el-icon>
+                </el-button>
+              </div>
             </el-tab-pane>
             <el-tab-pane label="预览" name="preview">
               <div class="markdown-preview" v-html="renderedPreviewDescription"></div>
