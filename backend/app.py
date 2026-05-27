@@ -996,9 +996,7 @@ def update_feature(id):
         return jsonify(message='节点不存在'), 404
     data = request.get_json()
     
-    # 应用节点不允许编辑
-    if feature.node_type == 'app':
-        return jsonify(message='应用节点不允许编辑'), 400
+
     
     # 验证待审核的节点在未被审核前不允许编辑
     if feature.status == 'pending':

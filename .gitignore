@@ -36,3 +36,6 @@ build/
 # 临时文件
 tmp/
 temp/
+
+# Trae 项目文件
+.trae/

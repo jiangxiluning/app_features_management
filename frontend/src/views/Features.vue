@@ -73,7 +73,7 @@
         <el-card class="detail-container" v-if="selectedFeature">
           <div class="detail-header">
             <h3>{{ selectedFeature.name }} - 详细信息</h3>
-            <el-button type="primary" @click="handleEditFeature(selectedFeature)" v-if="selectedFeature.status !== 'pending' && selectedFeature.node_type !== 'app'">
+            <el-button type="primary" @click="handleEditFeature(selectedFeature)" v-if="selectedFeature.status !== 'pending'">
               编辑
             </el-button>
             <el-button type="success" @click="handleOpenVersionDialog(selectedFeature.id)" v-if="selectedFeature.node_type === 'app' && isAdmin && selectedFeature.status !== 'pending'">
