@@ -349,10 +349,10 @@
                   @click="optimizeDescription"
                   :loading="optimizing"
                   :disabled="!selectedFeature || !featureForm.description"
-                  style="position: absolute; top: 8px; right: 8px; z-index: 10;"
+                  style="position: absolute; top: 8px; right: 8px; z-index: 10; padding: 2px;"
                   title="智慧优化"
                 >
-                  <el-icon><i-ep-magic-stick /></el-icon>
+                  <img src="@/assets/记忆变量.png" style="width: 20px; height: 20px; border-radius: 2px;" />
                 </el-button>
               </div>
             </el-tab-pane>
