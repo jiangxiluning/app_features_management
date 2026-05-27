@@ -342,6 +342,7 @@
                   placeholder="请输入功能描述（支持 Markdown 格式）"
                 ></el-input>
                 <el-button
+                  v-if="featureForm.node_type === 'function'"
                   type="primary"
                   size="small"
                   circle
