@@ -32,6 +32,7 @@ class LLMService:
         client_kwargs = {
             'api_key': self.config.api_key,
             'base_url': self.config.base_url,
+            'timeout': 120.0,  # 设置超时时间为120秒
         }
         
         # 如果开启了不使用代理，则直接返回
@@ -54,8 +55,8 @@ class LLMService:
             if use_https_proxy:
                 proxies['https://'] = use_https_proxy
             
-            # 使用自定义httpx客户端
-            http_client = httpx.Client(proxies=proxies)
+            # 使用自定义httpx客户端，并设置超时
+            http_client = httpx.Client(proxies=proxies, timeout=120.0)
             client_kwargs['http_client'] = http_client
         
         return OpenAI(**client_kwargs)
