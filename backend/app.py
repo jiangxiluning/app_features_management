@@ -210,6 +210,7 @@ class LLMConfig(db.Model):
             'id': self.id,
             'name': self.name,
             'base_url': self.base_url,
+            'api_key': self.api_key,
             'model_name': self.model_name,
             'enable_search': self.enable_search,
             'system_prompt': self.system_prompt,
