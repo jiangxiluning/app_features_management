@@ -48,7 +48,7 @@ export const encryptPassword = async (password) => {
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 10000
+  timeout: 120000
 })
 
 // 添加请求拦截器，确保携带token
