@@ -207,6 +207,10 @@ const testConnection = async () => {
   
   testing.value = true
   try {
+    // 先保存配置到数据库
+    await llmAPI.saveConfig(configForm)
+    
+    // 然后测试连接
     const response = await llmAPI.testConnection()
     if (response.data.success) {
       ElMessage.success(response.data.message || '连接成功')
