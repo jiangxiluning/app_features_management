@@ -343,16 +343,15 @@
                 ></el-input>
                 <el-button
                   v-if="featureForm.node_type === 'function'"
-                  type="primary"
+                  link
                   size="small"
-                  circle
                   @click="optimizeDescription"
                   :loading="optimizing"
                   :disabled="!selectedFeature || !featureForm.description"
-                  style="position: absolute; top: 8px; right: 8px; z-index: 10; padding: 2px;"
+                  style="position: absolute; top: 8px; right: 8px; z-index: 10; padding: 0; min-width: 0; width: auto; height: auto;"
                   title="智慧优化"
                 >
-                  <img src="/memory-variable.png" style="width: 20px; height: 20px; border-radius: 2px;" />
+                  <img src="/memory-variable.png" style="width: 24px; height: 24px; border-radius: 4px;" />
                 </el-button>
               </div>
             </el-tab-pane>
