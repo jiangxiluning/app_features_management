@@ -2674,9 +2674,11 @@ def optimize_description():
             }
             original_description_for_optimization = description
         
-        # 确保 context 中的 feature_description 使用我们想要优化的内容
+        # 确保 context 中的 feature_description 和 feature_name 使用编辑框中的内容
         if description:
             context['feature_description'] = description
+        if feature_name:
+            context['feature_name'] = feature_name
         
         # 渲染prompt
         system_prompt = PromptService.render_prompt(config.system_prompt, context)
