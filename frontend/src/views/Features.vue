@@ -971,7 +971,7 @@ const optimizeDescription = async () => {
   
   optimizing.value = true
   try {
-    const response = await llmAPI.optimizeDescription(selectedFeature.value.id)
+    const response = await llmAPI.optimizeDescription(selectedFeature.value.id, featureForm.description)
     originalDescription.value = featureForm.description
     optimizedDescription.value = response.data.optimized_description
     ElMessage.success(response.data.message || '优化成功')

@@ -2622,6 +2622,7 @@ def optimize_description():
     try:
         data = request.get_json()
         feature_id = data.get('feature_id')
+        description = data.get('description')
         
         if not feature_id:
             return jsonify(message='功能ID不能为空'), 400
@@ -2646,6 +2647,12 @@ def optimize_description():
         # 构建上下文
         context = PromptService.get_optimization_context(feature)
         
+        # 如果前端提供了描述，则使用前端的描述，否则使用数据库中的描述
+        original_description_for_optimization = description if description else feature.description
+        
+        # 确保 context 中的 feature_description 使用我们想要优化的内容
+        context['feature_description'] = original_description_for_optimization
+        
         # 渲染prompt
         system_prompt = PromptService.render_prompt(config.system_prompt, context)
         user_prompt = PromptService.render_prompt(config.user_prompt, context)
@@ -2660,7 +2667,7 @@ def optimize_description():
         
         return jsonify(
             message='优化成功',
-            original_description=feature.description,
+            original_description=original_description_for_optimization,
             optimized_description=optimized_description
         )
     except Exception as e:
