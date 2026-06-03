@@ -347,7 +347,7 @@
                   size="small"
                   @click="optimizeDescription"
                   :loading="optimizing"
-                  :disabled="!selectedFeature || !featureForm.description"
+                  :disabled="!featureForm.description"
                   style="position: absolute; top: 8px; right: 8px; z-index: 10; padding: 0; min-width: 0; width: auto; height: auto;"
                   title="智慧优化"
                 >
@@ -959,11 +959,6 @@ const originalDescription = ref('')
 const optimizedDescription = ref('')
 
 const optimizeDescription = async () => {
-  if (!selectedFeature.value) {
-    ElMessage.warning('请先选择一个功能')
-    return
-  }
-  
   if (!featureForm.description) {
     ElMessage.warning('请先输入功能描述')
     return
@@ -971,7 +966,9 @@ const optimizeDescription = async () => {
   
   optimizing.value = true
   try {
-    const response = await llmAPI.optimizeDescription(selectedFeature.value.id, featureForm.description)
+    // 如果有 selectedFeature，使用它的 id，否则不传 id
+    const featureId = selectedFeature.value ? selectedFeature.value.id : null
+    const response = await llmAPI.optimizeDescription(featureId, featureForm.description, featureForm.parent_id, featureForm.name)
     originalDescription.value = featureForm.description
     optimizedDescription.value = response.data.optimized_description
     ElMessage.success(response.data.message || '优化成功')

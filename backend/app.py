@@ -2623,14 +2623,8 @@ def optimize_description():
         data = request.get_json()
         feature_id = data.get('feature_id')
         description = data.get('description')
-        
-        if not feature_id:
-            return jsonify(message='功能ID不能为空'), 400
-        
-        # 获取功能
-        feature = Feature.query.get(feature_id)
-        if not feature:
-            return jsonify(message='功能不存在'), 404
+        parent_id = data.get('parent_id')
+        feature_name = data.get('feature_name')
         
         # 获取LLM配置
         config = LLMConfig.query.first()
@@ -2644,14 +2638,45 @@ def optimize_description():
         from services.llm_service import LLMService
         from services.prompt_service import PromptService
         
-        # 构建上下文
-        context = PromptService.get_optimization_context(feature)
-        
-        # 如果前端提供了描述，则使用前端的描述，否则使用数据库中的描述
-        original_description_for_optimization = description if description else feature.description
+        feature = None
+        if feature_id:
+            # 获取功能
+            feature = Feature.query.get(feature_id)
+            if not feature:
+                return jsonify(message='功能不存在'), 404
+            # 构建上下文
+            context = PromptService.get_optimization_context(feature)
+            # 如果前端提供了描述，则使用前端的描述，否则使用数据库中的描述
+            original_description_for_optimization = description if description else feature.description
+        else:
+            # 新建功能或复制功能的情况，手动构建上下文
+            app_name = ''
+            app_description = ''
+            
+            # 通过 parent_id 查找应用信息
+            if parent_id:
+                current = Feature.query.get(parent_id)
+                while current:
+                    if current.node_type == 'app':
+                        app_name = current.name or ''
+                        app_description = current.description or ''
+                        break
+                    if current.parent_id:
+                        current = current.parent
+                    else:
+                        break
+            
+            context = {
+                'app_name': app_name,
+                'app_description': app_description,
+                'feature_name': feature_name or '',
+                'feature_description': description or ''
+            }
+            original_description_for_optimization = description
         
         # 确保 context 中的 feature_description 使用我们想要优化的内容
-        context['feature_description'] = original_description_for_optimization
+        if description:
+            context['feature_description'] = description
         
         # 渲染prompt
         system_prompt = PromptService.render_prompt(config.system_prompt, context)

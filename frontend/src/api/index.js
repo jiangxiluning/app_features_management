@@ -150,7 +150,12 @@ export const llmAPI = {
   getConfig: () => api.get('/llm/config'),
   saveConfig: (data) => api.post('/llm/config', data),
   testConnection: () => api.post('/llm/test'),
-  optimizeDescription: (featureId, description) => api.post('/llm/optimize', { feature_id: featureId, description: description })
+  optimizeDescription: (featureId, description, parentId, featureName) => api.post('/llm/optimize', { 
+    feature_id: featureId, 
+    description: description,
+    parent_id: parentId,
+    feature_name: featureName
+  })
 }
 
 export default api
