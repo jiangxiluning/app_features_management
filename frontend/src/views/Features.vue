@@ -40,7 +40,7 @@
             :default-expand-all="false"
             :expand-on-click-node="false"
             :auto-expand-parent="false"
-            :default-expanded-keys="getExpandedKeys"
+            v-model:expanded-keys="expandedKeys"
             @node-click="handleNodeClick"
             @node-expand="handleNodeExpand"
             @node-collapse="handleNodeCollapse"
@@ -782,7 +782,7 @@
 
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted, h, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, h, nextTick, watch } from 'vue'
 import { featureAPI, versionAPI, deviceAPI, llmAPI } from '../api'
 import api from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -896,8 +896,9 @@ const isDragging = ref(false)
 // 展开的节点ID数组
 const expandedKeys = ref([])
 
-const getExpandedKeys = computed(() => {
-  if (searchQuery.value.trim()) {
+// 搜索时展开所有匹配的节点
+watch(searchQuery, (newVal) => {
+  if (newVal.trim()) {
     const keys = []
     const collectKeys = (nodes) => {
       nodes.forEach(node => {
@@ -908,9 +909,8 @@ const getExpandedKeys = computed(() => {
       })
     }
     collectKeys(filteredFeaturesTree.value)
-    return keys
+    expandedKeys.value = keys
   }
-  return expandedKeys.value
 })
 
 // 对话框相关
@@ -1201,9 +1201,6 @@ const handleSelectAllDevices = (value) => {
 // 加载数据
 const loadData = async () => {
   try {
-    // 保存当前的展开状态
-    const currentExpandedKeys = [...expandedKeys.value]
-    
     let username = 'user'
     let userRole = 'developer'
     let user_id = '1'
@@ -1221,12 +1218,6 @@ const loadData = async () => {
     
     // 加载设备列表
     await loadDevices()
-    
-    // 使用nextTick确保树组件在数据更新后能够正确地应用展开状态
-    await nextTick()
-    
-    // 恢复之前的展开状态
-    expandedKeys.value = currentExpandedKeys
   } catch (error) {
     ElMessage.error('加载数据失败')
   }
@@ -2307,12 +2298,6 @@ const handleSaveFeature = async () => {
             user_id: user_id
           })
           ElMessage.success(`${getNodeTypeLabel(featureForm.node_type)}节点添加成功`)
-          // 添加新节点后，自动展开其父节点
-          if (featureForm.parent_id) {
-            if (!expandedKeys.value.includes(featureForm.parent_id)) {
-              expandedKeys.value.push(featureForm.parent_id)
-            }
-          }
         }
         dialogVisible.value = false
         loadData()
