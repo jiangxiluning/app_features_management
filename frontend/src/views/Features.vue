@@ -1198,6 +1198,21 @@ const handleSelectAllDevices = (value) => {
   }
 }
 
+// 收集树中所有节点的 ID
+const collectAllNodeIds = (nodes) => {
+  const ids = []
+  const traverse = (nodeList) => {
+    nodeList.forEach(node => {
+      ids.push(node.id)
+      if (node.children && node.children.length > 0) {
+        traverse(node.children)
+      }
+    })
+  }
+  traverse(nodes)
+  return ids
+}
+
 // 加载数据
 const loadData = async () => {
   try {
@@ -1225,8 +1240,11 @@ const loadData = async () => {
     // 使用nextTick确保树组件在数据更新后能够正确地应用展开状态
     await nextTick()
     
-    // 恢复之前的展开状态
-    expandedKeys.value = currentExpandedKeys
+    // 收集新数据中所有节点的 ID
+    const allNodeIds = collectAllNodeIds(featuresTree.value)
+    
+    // 恢复之前的展开状态，只保留仍然存在的节点
+    expandedKeys.value = currentExpandedKeys.filter(id => allNodeIds.includes(id))
   } catch (error) {
     ElMessage.error('加载数据失败')
   }
