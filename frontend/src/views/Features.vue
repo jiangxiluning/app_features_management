@@ -34,6 +34,8 @@
           </div>
           <h3>功能树</h3>
           <el-tree
+            ref="featureTreeRef"
+            :key="featureTreeKey"
             :data="filteredFeaturesTree"
             node-key="id"
             :props="treeProps"
@@ -791,6 +793,8 @@ import { marked } from 'marked'
 
 const features = ref([])
 const featuresTree = ref([])
+const featureTreeRef = ref(null)
+const featureTreeKey = ref(0)
 const selectedFeature = ref(null)
 const auditLogs = ref([])
 const oldFeatureData = ref({})
@@ -1237,14 +1241,21 @@ const loadData = async () => {
     // 加载设备列表
     await loadDevices()
     
-    // 使用nextTick确保树组件在数据更新后能够正确地应用展开状态
-    await nextTick()
-    
     // 收集新数据中所有节点的 ID
     const allNodeIds = collectAllNodeIds(featuresTree.value)
     
     // 恢复之前的展开状态，只保留仍然存在的节点
-    expandedKeys.value = currentExpandedKeys.filter(id => allNodeIds.includes(id))
+    const validExpandedKeys = currentExpandedKeys.filter(id => allNodeIds.includes(id))
+    
+    // 设置新的 expandedKeys
+    expandedKeys.value = [...validExpandedKeys]
+    
+    // 增加 key 值来强制刷新树组件
+    featureTreeKey.value += 1
+    
+    // 使用 nextTick 确保树组件已重新渲染
+    await nextTick()
+    await nextTick()
   } catch (error) {
     ElMessage.error('加载数据失败')
   }
