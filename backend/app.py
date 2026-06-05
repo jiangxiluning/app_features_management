@@ -436,6 +436,10 @@ def delete_user(id):
     user = User.query.get(id)
     if not user:
         return jsonify(message='用户不存在'), 404
+    if user.role == 'admin':
+        return jsonify(message='不能删除管理员角色用户'), 403
+    # 同时删除该用户的所有应用分配
+    UserApp.query.filter_by(user_id=id).delete()
     db.session.delete(user)
     db.session.commit()
     return jsonify(message='用户删除成功')

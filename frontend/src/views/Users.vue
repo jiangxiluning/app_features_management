@@ -5,23 +5,23 @@
       <el-button type="primary" @click="addUser">添加用户</el-button>
     </div>
     <el-table :data="users" style="width: 100%">
-      <el-table-column prop="id" label="ID" width="80" />
-      <el-table-column prop="username" label="用户名" />
-      <el-table-column prop="role" label="角色">
-          <template #default="scope">
+    <el-table-column prop="id" label="ID" width="80" />
+    <el-table-column prop="username" label="用户名" />
+    <el-table-column prop="role" label="角色">
+        <template #default="scope">
             {{ scope.row.role === 'admin' ? '管理员' : '开发者' }}
-          </template>
-        </el-table-column>
-      <el-table-column label="操作" width="240">
-          <template #default="scope">
+        </template>
+    </el-table-column>
+    <el-table-column label="操作" width="240">
+        <template #default="scope">
             <div style="display: flex; gap: 8px; align-items: center;">
-              <el-button type="primary" size="small" @click="editUser(scope.row)">编辑</el-button>
-              <el-button type="danger" size="small" @click="deleteUser(scope.row.id)">删除</el-button>
-              <el-button type="success" size="small" @click="assignApps(scope.row)" v-if="scope.row.role === 'developer'">分配应用</el-button>
+                <el-button type="primary" size="small" @click="editUser(scope.row)">编辑</el-button>
+                <el-button type="danger" size="small" @click="deleteUser(scope.row.id)" v-if="scope.row.role === 'developer'">删除</el-button>
+                <el-button type="success" size="small" @click="assignApps(scope.row)" v-if="scope.row.role === 'developer'">分配应用</el-button>
             </div>
-          </template>
-        </el-table-column>
-    </el-table>
+        </template>
+    </el-table-column>
+</el-table>
 
     <!-- 添加/编辑用户对话框 -->
     <el-dialog v-model="editDialogVisible" :title="isAddUser ? '添加用户' : '编辑用户'">
