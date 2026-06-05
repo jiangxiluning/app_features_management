@@ -1247,14 +1247,11 @@ const loadData = async () => {
     // 恢复之前的展开状态，只保留仍然存在的节点
     const validExpandedKeys = currentExpandedKeys.filter(id => allNodeIds.includes(id))
     
-    // 设置新的 expandedKeys
+    // 不强制刷新树组件，只更新数据和展开状态
+    // 这样可以避免树的重新初始化导致展开状态丢失
     expandedKeys.value = [...validExpandedKeys]
     
-    // 增加 key 值来强制刷新树组件
-    featureTreeKey.value += 1
-    
-    // 使用 nextTick 确保树组件已重新渲染
-    await nextTick()
+    // 给一些时间让Vue响应式更新
     await nextTick()
   } catch (error) {
     ElMessage.error('加载数据失败')
