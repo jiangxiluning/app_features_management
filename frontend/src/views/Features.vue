@@ -2686,8 +2686,7 @@ const handleExportJson = async (node) => {
               version_range: child.version_range,
               is_guide_supported: isGuideSupported,
               unsupported_devices: devices,
-              created_at: formattedCreatedAt,
-              path: parentPath ? `${parentPath}/${child.name}` : child.name
+              created_at: formattedCreatedAt
             }
             functionsList.push(functionData)
           }
