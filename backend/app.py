@@ -899,6 +899,18 @@ def create_feature():
     
     # 不再检查父节点状态，允许在未审核的分类节点下添加子节点
     
+    # 获取节点所属的应用根节点
+    def get_app_root(node_id):
+        node = Feature.query.get(node_id)
+        while node and node.parent_id:
+            node = Feature.query.get(node.parent_id)
+        return node.id if node else None
+    
+    # 获取应用ID
+    app_id = None
+    if parent_id:
+        app_id = get_app_root(parent_id)
+    
     # 权限检查：开发只能在被授权的应用中创建节点
     if user_role != 'admin' and user_id:
         # 获取用户授权的应用
@@ -906,25 +918,43 @@ def create_feature():
         authorized_app_ids = [ua.app_id for ua in user_apps]
         
         # 检查父节点是否在授权的应用中
-        if parent_id:
-            # 获取父节点所属的应用
-            def get_app_root(node_id):
-                node = Feature.query.get(node_id)
-                while node.parent_id:
-                    node = Feature.query.get(node.parent_id)
-                return node.id
+        if app_id and app_id not in authorized_app_ids:
+            return jsonify(message='您没有权限在该应用中创建节点'), 403
+    
+    # 检查名称重复
+    if node_type == 'function' and app_id:
+        # 对于功能节点，在整个应用范围内检查重复
+        # 查询同一应用下所有同名的功能节点
+        # 需要递归查找应用下的所有功能节点
+        
+        def get_all_function_names_in_app(app_node_id):
+            # 获取应用下所有功能节点的名称
+            function_names = []
             
-            app_id = get_app_root(parent_id)
-            if app_id not in authorized_app_ids:
-                return jsonify(message='您没有权限在该应用中创建节点'), 403
-    
-    existing_feature = Feature.query.filter_by(
-        parent_id=parent_id,
-        name=name
-    ).first()
-    
-    if existing_feature:
-        return jsonify(message='同一层级已存在同名节点'), 400
+            def traverse(node_id):
+                node = Feature.query.get(node_id)
+                if node:
+                    if node.node_type == 'function':
+                        function_names.append(node.name)
+                    if node.children:
+                        for child in node.children:
+                            traverse(child.id)
+            
+            traverse(app_node_id)
+            return function_names
+        
+        all_function_names = get_all_function_names_in_app(app_id)
+        if name in all_function_names:
+            return jsonify(message='该应用内已存在同名功能'), 400
+    else:
+        # 对于应用和分类节点，只在同层级检查重复
+        existing_feature = Feature.query.filter_by(
+            parent_id=parent_id,
+            name=name
+        ).first()
+        
+        if existing_feature:
+            return jsonify(message='同一层级已存在同名节点'), 400
     
     # 设置状态
     status = 'approved' if user_role == 'admin' else 'pending'
@@ -1030,6 +1060,16 @@ def update_feature(id):
     if node_type == 'function' and parent_id is None:
         return jsonify(message='功能节点不能是根节点'), 400
     
+    # 获取节点所属的应用根节点
+    def get_app_root(node_id):
+        node = Feature.query.get(node_id)
+        while node and node.parent_id:
+            node = Feature.query.get(node.parent_id)
+        return node.id if node else None
+    
+    # 获取应用ID
+    app_id = get_app_root(feature.id)
+    
     # 权限检查：开发只能修改被授权的应用的相关数据
     if user_role != 'admin' and user_id:
         # 获取用户授权的应用
@@ -1037,28 +1077,43 @@ def update_feature(id):
         authorized_app_ids = [ua.app_id for ua in user_apps]
         
         # 检查节点是否在授权的应用中
-        # 获取节点所属的应用
-        def get_app_root(node_id):
-            node = Feature.query.get(node_id)
-            while node.parent_id:
-                node = Feature.query.get(node.parent_id)
-            return node.id
-        
-        app_id = get_app_root(feature.id)
-        if app_id not in authorized_app_ids:
+        if app_id and app_id not in authorized_app_ids:
             return jsonify(message='您没有权限修改该节点'), 403
     
-    # 验证同层级节点名称是否唯一
+    # 验证节点名称是否唯一
     if 'name' in data and data['name'] != feature.name:
         name = data['name']
         
-        existing_feature = Feature.query.filter_by(
-            parent_id=parent_id,
-            name=name
-        ).filter(Feature.id != id).first()
-        
-        if existing_feature:
-            return jsonify(message='同一层级已存在同名节点'), 400
+        if feature.node_type == 'function' and app_id:
+            # 对于功能节点，在整个应用范围内检查重复
+            def get_all_function_names_in_app(app_node_id, exclude_id=None):
+                # 获取应用下所有功能节点的名称，排除指定ID
+                function_names = []
+                
+                def traverse(node_id):
+                    node = Feature.query.get(node_id)
+                    if node:
+                        if node.node_type == 'function' and (exclude_id is None or node.id != exclude_id):
+                            function_names.append(node.name)
+                        if node.children:
+                            for child in node.children:
+                                traverse(child.id)
+                
+                traverse(app_node_id)
+                return function_names
+            
+            all_function_names = get_all_function_names_in_app(app_id, exclude_id=feature.id)
+            if name in all_function_names:
+                return jsonify(message='该应用内已存在同名功能'), 400
+        else:
+            # 对于应用和分类节点，只在同层级检查重复
+            existing_feature = Feature.query.filter_by(
+                parent_id=parent_id,
+                name=name
+            ).filter(Feature.id != id).first()
+            
+            if existing_feature:
+                return jsonify(message='同一层级已存在同名节点'), 400
     
     # 设置状态
     status = 'approved' if user_role == 'admin' else 'pending'
@@ -1342,14 +1397,47 @@ def move_feature(id):
         if feature.node_type == 'category':
             return jsonify(message='分类节点不能移动到顶层'), 400
     
-    # 检查移动后是否会导致同层级节点名称重复
-    existing_feature = Feature.query.filter_by(
-        parent_id=new_parent_id,
-        name=feature.name
-    ).filter(Feature.id != id).first()
-    
-    if existing_feature:
-        return jsonify(message='目标层级已存在同名节点'), 400
+    # 检查移动后是否会导致节点名称重复
+    if feature.node_type == 'function':
+        # 对于功能节点，在整个应用范围内检查重复
+        # 获取应用根节点
+        def get_app_root_func(node_id):
+            node = Feature.query.get(node_id)
+            while node and node.parent_id:
+                node = Feature.query.get(node.parent_id)
+            return node.id if node else None
+        
+        app_id = get_app_root_func(new_parent_id) if new_parent_id else None
+        
+        if app_id:
+            # 检查整个应用内是否有同名功能
+            def get_all_function_names_in_app(app_node_id, exclude_id=None):
+                function_names = []
+                
+                def traverse(node_id):
+                    node = Feature.query.get(node_id)
+                    if node:
+                        if node.node_type == 'function' and (exclude_id is None or node.id != exclude_id):
+                            function_names.append(node.name)
+                        if node.children:
+                            for child in node.children:
+                                traverse(child.id)
+                
+                traverse(app_node_id)
+                return function_names
+            
+            all_function_names = get_all_function_names_in_app(app_id, exclude_id=feature.id)
+            if feature.name in all_function_names:
+                return jsonify(message='该应用内已存在同名功能'), 400
+    else:
+        # 对于分类节点，只在同层级检查重复
+        existing_feature = Feature.query.filter_by(
+            parent_id=new_parent_id,
+            name=feature.name
+        ).filter(Feature.id != id).first()
+        
+        if existing_feature:
+            return jsonify(message='目标层级已存在同名节点'), 400
     
     # 验证功能节点不能是根节点
     if feature.node_type == 'function' and new_parent_id is None:
