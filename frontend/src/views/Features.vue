@@ -704,7 +704,7 @@
         <!-- 功能选择区域 -->
         <div style="margin-bottom: 20px;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-            <label style="font-weight: bold;">选择要导出的功能</label>
+            <label style="font-weight: bold;">选择要导出的功能 (已选 {{ selectedFeaturesForExport.length }})</label>
             <el-button size="small" @click="toggleSelectAll">
               {{ isAllSelected ? '取消全选' : '全选' }}
             </el-button>
