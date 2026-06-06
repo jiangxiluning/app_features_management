@@ -709,12 +709,24 @@
               {{ isAllSelected ? '取消全选' : '全选' }}
             </el-button>
           </div>
+          <!-- 搜索框 -->
+          <div style="margin-bottom: 10px;">
+            <el-input
+              v-model="exportSearchQuery"
+              placeholder="搜索功能名称"
+              clearable
+              prefix-icon="Search"
+            ></el-input>
+          </div>
           <div style="max-height: 200px; overflow-y: auto; border: 1px solid #dcdfe6; border-radius: 4px; padding: 10px;">
             <el-checkbox-group v-model="selectedFeaturesForExport">
-              <div v-for="feature in exportableFeatures" :key="feature.id" style="margin: 5px 0;">
+              <div v-for="feature in filteredExportableFeatures" :key="feature.id" style="margin: 5px 0;">
                 <el-checkbox :label="feature.id">
                   {{ feature.name }}
                 </el-checkbox>
+              </div>
+              <div v-if="filteredExportableFeatures.length === 0" style="text-align: center; color: #909399; padding: 10px;">
+                没有找到匹配的功能
               </div>
             </el-checkbox-group>
           </div>
@@ -964,6 +976,18 @@ const exportDialogVisible = ref(false)
 const showTemplateHelp = ref(false)
 const exportableFeatures = ref([])
 const selectedFeaturesForExport = ref([])
+const exportSearchQuery = ref('')
+
+// 过滤导出功能
+const filteredExportableFeatures = computed(() => {
+  if (!exportSearchQuery.value) {
+    return exportableFeatures.value
+  }
+  const query = exportSearchQuery.value.toLowerCase()
+  return exportableFeatures.value.filter(feature => 
+    feature.name.toLowerCase().includes(query)
+  )
+})
 const templateSemantics = ref([
   { template: '{{name}}', semantic: '功能名称' },
   { template: '{{description}}', semantic: '功能描述' },
