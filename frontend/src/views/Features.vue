@@ -700,7 +700,26 @@
       width="80%"
       :before-close="handleClose"
     >
-      <div style="padding: 20px; min-height: 600px;">
+      <div style="padding: 20px; min-height: 700px;">
+        <!-- 功能选择区域 -->
+        <div style="margin-bottom: 20px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <label style="font-weight: bold;">选择要导出的功能</label>
+            <el-button size="small" @click="toggleSelectAll">
+              {{ isAllSelected ? '取消全选' : '全选' }}
+            </el-button>
+          </div>
+          <div style="max-height: 200px; overflow-y: auto; border: 1px solid #dcdfe6; border-radius: 4px; padding: 10px;">
+            <el-checkbox-group v-model="selectedFeaturesForExport">
+              <div v-for="feature in exportableFeatures" :key="feature.id" style="margin: 5px 0;">
+                <el-checkbox :label="feature.id">
+                  {{ feature.name }}
+                </el-checkbox>
+              </div>
+            </el-checkbox-group>
+          </div>
+        </div>
+        
         <!-- 模板说明超链接 -->
         <div style="margin-bottom: 20px;">
           <el-link type="primary" @click="showTemplateHelp = true">查看模板字符串语义解释</el-link>
@@ -711,7 +730,7 @@
           <label style="display: block; margin-bottom: 10px; font-weight: bold;">导出模板</label>
           <textarea
             v-model="exportTemplate"
-            style="width: 100%; height: 400px; padding: 10px; border: 1px solid #dcdfe6; border-radius: 4px; resize: vertical; font-family: monospace;"
+            style="width: 100%; height: 350px; padding: 10px; border: 1px solid #dcdfe6; border-radius: 4px; resize: vertical; font-family: monospace;"
             placeholder="使用{{字段名}}的形式插入字段值，例如{{name}}、{{description}}等"
           ></textarea>
         </div>
@@ -943,6 +962,8 @@ const currentContextNode = ref(null)
 // 导出相关
 const exportDialogVisible = ref(false)
 const showTemplateHelp = ref(false)
+const exportableFeatures = ref([])
+const selectedFeaturesForExport = ref([])
 const templateSemantics = ref([
   { template: '{{name}}', semantic: '功能名称' },
   { template: '{{description}}', semantic: '功能描述' },
@@ -2542,6 +2563,23 @@ const stopDrag = () => {
   document.body.style.userSelect = ''
 }
 
+// 收集应用下所有已审核的功能
+const collectExportableFeatures = (node) => {
+  const features = []
+  const traverse = (currentNode) => {
+    if (currentNode.children) {
+      for (const child of currentNode.children) {
+        if (child.node_type === 'function' && child.status === 'approved') {
+          features.push({ id: child.id, name: child.name })
+        }
+        traverse(child)
+      }
+    }
+  }
+  traverse(node)
+  return features
+}
+
 // 处理导出
 const handleExport = (node) => {
   console.log('Export function called with node:', node)
@@ -2550,6 +2588,10 @@ const handleExport = (node) => {
     console.log('Node is not an app, returning')
     return
   }
+  // 收集可导出的功能
+  exportableFeatures.value = collectExportableFeatures(node)
+  // 默认全选所有功能
+  selectedFeaturesForExport.value = exportableFeatures.value.map(f => f.id)
   console.log('Setting exportDialogVisible.value to true')
   exportDialogVisible.value = true
   console.log('exportDialogVisible.value:', exportDialogVisible.value)
@@ -2559,9 +2601,29 @@ const handleExport = (node) => {
   }, 100)
 }
 
+// 计算是否全选
+const isAllSelected = computed(() => {
+  if (exportableFeatures.value.length === 0) return false
+  return selectedFeaturesForExport.value.length === exportableFeatures.value.length
+})
+
+// 切换全选/取消全选
+const toggleSelectAll = () => {
+  if (isAllSelected.value) {
+    selectedFeaturesForExport.value = []
+  } else {
+    selectedFeaturesForExport.value = exportableFeatures.value.map(f => f.id)
+  }
+}
+
 // 确认导出
 const confirmExport = async () => {
   if (!currentContextNode.value || currentContextNode.value.node_type !== 'app') return
+  
+  if (selectedFeaturesForExport.value.length === 0) {
+    ElMessage.warning('请至少选择一个功能进行导出')
+    return
+  }
   
   isExporting.value = true
   try {
@@ -2569,9 +2631,10 @@ const confirmExport = async () => {
     const appId = currentContextNode.value.id
     const appName = currentContextNode.value.name || 'app'
     
-    // 调用后端API导出zip文件，传递模板内容
+    // 调用后端API导出zip文件，传递模板内容和选中的功能ID
     const response = await api.post(`/features/${appId}/export`, {
-      template: exportTemplate.value
+      template: exportTemplate.value,
+      feature_ids: selectedFeaturesForExport.value
     }, {
       responseType: 'blob'
     })

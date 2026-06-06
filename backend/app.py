@@ -1921,6 +1921,7 @@ def export_features(app_id):
     # 获取请求体中的模板内容
     data = request.get_json()
     template = data.get('template', '')
+    feature_ids = data.get('feature_ids', None)
     
     # 获取应用下的所有已审核功能节点
     def get_approved_features_under_app(app_node):
@@ -1937,6 +1938,10 @@ def export_features(app_id):
         return approved_features
     
     approved_features = get_approved_features_under_app(app_feature)
+    
+    # 如果指定了 feature_ids，只导出指定的功能
+    if feature_ids:
+        approved_features = [f for f in approved_features if f.id in feature_ids]
     
     if not approved_features:
         return jsonify(message='该应用下没有已审核的功能节点可导出'), 400
