@@ -35,14 +35,13 @@
           <h3>功能树</h3>
           <el-tree
             ref="featureTreeRef"
-            :key="featureTreeKey"
-            :data="filteredFeaturesTree"
+            :data="featuresTree"
             node-key="id"
             :props="treeProps"
             :default-expand-all="false"
             :expand-on-click-node="false"
             :auto-expand-parent="false"
-            v-model:expanded-keys="expandedKeys"
+            :filter-node-method="filterNode"
             @node-click="handleNodeClick"
             @node-expand="handleNodeExpand"
             @node-collapse="handleNodeCollapse"
@@ -825,81 +824,140 @@ import { marked } from 'marked'
 const features = ref([])
 const featuresTree = ref([])
 const featureTreeRef = ref(null)
-const featureTreeKey = ref(0)
+
+// 在树中查找节点
+const findNodeInTree = (nodes, id) => {
+  for (const node of nodes) {
+    if (node.id === id) return node
+    if (node.children && node.children.length > 0) {
+      const found = findNodeInTree(node.children, id)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+// 在树中查找父节点
+const findParentInTree = (nodes, id, parent = null) => {
+  for (const node of nodes) {
+    if (node.id === id) return parent
+    if (node.children && node.children.length > 0) {
+      const found = findParentInTree(node.children, id, node)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+// 从树中删除节点
+const removeNodeFromTree = (nodes, id) => {
+  for (let i = 0; i < nodes.length; i++) {
+    if (nodes[i].id === id) {
+      nodes.splice(i, 1)
+      return true
+    }
+    if (nodes[i].children && nodes[i].children.length > 0) {
+      if (removeNodeFromTree(nodes[i].children, id)) return true
+    }
+  }
+  return false
+}
+
+// 更新树中节点
+const updateNodeInTree = (nodes, id, updates) => {
+  for (const node of nodes) {
+    if (node.id === id) {
+      Object.assign(node, updates)
+      return true
+    }
+    if (node.children && node.children.length > 0) {
+      if (updateNodeInTree(node.children, id, updates)) return true
+    }
+  }
+  return false
+}
+
+// 添加节点到树中
+const addNodeToTree = (nodes, parentId, newNode) => {
+  if (parentId === null || parentId === undefined) {
+    nodes.push(newNode)
+    return true
+  }
+  for (const node of nodes) {
+    if (node.id === parentId) {
+      if (!node.children) node.children = []
+      node.children.push(newNode)
+      return true
+    }
+    if (node.children && node.children.length > 0) {
+      if (addNodeToTree(node.children, parentId, newNode)) return true
+    }
+  }
+  return false
+}
+// 在树中移动节点
+const moveNodeInTree = (nodes, nodeId, newParentId) => {
+  let nodeToMove = null
+  const findAndRemove = (list) => {
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].id === nodeId) {
+        nodeToMove = list.splice(i, 1)[0]
+        return true
+      }
+      if (list[i].children && list[i].children.length > 0) {
+        if (findAndRemove(list[i].children)) return true
+      }
+    }
+    return false
+  }
+  findAndRemove(nodes)
+  if (!nodeToMove) return false
+  if (newParentId === null || newParentId === undefined) {
+    nodes.push(nodeToMove)
+  } else {
+    addNodeToTree(nodes, newParentId, nodeToMove)
+  }
+  return true
+}
+
 const selectedFeature = ref(null)
 const auditLogs = ref([])
 const oldFeatureData = ref({})
 const guideOnly = ref(false)
 const searchQuery = ref('')
 
-const filteredFeaturesTree = computed(() => {
-  let result = featuresTree.value
-  
-  if (guideOnly.value) {
-    const filterByGuide = (nodes) => {
-      return nodes
-        .map(node => {
-          let filteredChildren = []
-          if (node.children && node.children.length > 0) {
-            filteredChildren = filterByGuide(node.children)
-          }
-          
-          if (node.node_type === 'function') {
-            if (node.is_guide_supported === true || node.is_guide_supported === 'true') {
-              return { ...node, children: filteredChildren }
-            }
-            return null
-          } else if (node.node_type === 'category') {
-            if (filteredChildren.length > 0) {
-              return { ...node, children: filteredChildren }
-            }
-            return null
-          } else if (node.node_type === 'app') {
-            return { ...node, children: filteredChildren }
-          }
-          return null
-        })
-        .filter(node => node !== null)
+const filterNode = (value, data) => {
+  if (!value) return true
+  try {
+    const parsed = JSON.parse(value)
+    if (parsed.guideOnly && data.node_type === 'function') {
+      if (data.is_guide_supported !== true && data.is_guide_supported !== 'true') {
+        return false
+      }
     }
-    result = filterByGuide(result)
-  }
-  
-  if (searchQuery.value.trim()) {
-    const query = searchQuery.value.trim().toLowerCase()
-    const filterBySearch = (nodes) => {
-      return nodes
-        .map(node => {
-          let filteredChildren = []
-          if (node.children && node.children.length > 0) {
-            filteredChildren = filterBySearch(node.children)
-          }
-          
-          if (node.node_type === 'function') {
-            const nodeName = (node.name || '').toLowerCase()
-            if (nodeName.includes(query)) {
-              return { ...node, children: filteredChildren }
-            }
-            return null
-          } else if (node.node_type === 'category') {
-            if (filteredChildren.length > 0) {
-              return { ...node, children: filteredChildren }
-            }
-            return null
-          } else if (node.node_type === 'app') {
-            if (filteredChildren.length > 0) {
-              return { ...node, children: filteredChildren }
-            }
-            return null
-          }
-          return null
-        })
-        .filter(node => node !== null)
+    if (parsed.query) {
+      const nodeName = (data.name || '').toLowerCase()
+      if (!nodeName.includes(parsed.query.toLowerCase())) {
+        return false
+      }
     }
-    result = filterBySearch(result)
+  } catch (e) {
+    return true
   }
-  
-  return result
-})
+  return true
+}
+
+const applyTreeFilter = () => {
+  nextTick(() => {
+    if (featureTreeRef.value) {
+      const filterValue = JSON.stringify({
+        query: searchQuery.value,
+        guideOnly: guideOnly.value
+      })
+      featureTreeRef.value.filter(filterValue)
+    }
+  })
+}
 
 // 检查用户角色
 const isAdmin = computed(() => {
@@ -943,9 +1001,17 @@ watch(searchQuery, (newVal) => {
         }
       })
     }
-    collectKeys(filteredFeaturesTree.value)
+    collectKeys(featuresTree.value)
     expandedKeys.value = keys
+    if (featureTreeRef.value) {
+      featureTreeRef.value.setExpandedKeys(keys)
+    }
   }
+  applyTreeFilter()
+})
+
+watch(guideOnly, () => {
+  applyTreeFilter()
 })
 
 // 对话框相关
@@ -1265,7 +1331,6 @@ const collectAllNodeIds = (nodes) => {
 // 加载数据
 const loadData = async () => {
   try {
-    // 保存当前的展开状态
     const currentExpandedKeys = [...expandedKeys.value]
     
     let username = 'user'
@@ -1280,29 +1345,26 @@ const loadData = async () => {
     }
     
     const featuresResponse = await featureAPI.getFeatures(userRole, user_id)
-    // 后端返回的响应包含data和total字段
-    featuresTree.value = featuresResponse.data.data
+    const newFeaturesData = featuresResponse.data.data
     
-    // 加载设备列表
+    featuresTree.value = newFeaturesData
+    
     await loadDevices()
     
-    // 收集新数据中所有节点的 ID
-    const allNodeIds = collectAllNodeIds(featuresTree.value)
+    await nextTick()
     
-    // 恢复之前的展开状态，只保留仍然存在的节点
+    const allNodeIds = collectAllNodeIds(newFeaturesData)
     const validExpandedKeys = currentExpandedKeys.filter(id => allNodeIds.includes(id))
     
-    // 不强制刷新树组件，只更新数据和展开状态
-    // 这样可以避免树的重新初始化导致展开状态丢失
-    // 直接更新 expandedKeys，不要改变 featureTreeKey 来避免树完全重新渲染
     expandedKeys.value = [...validExpandedKeys]
     
-    // 给一些时间让Vue响应式更新
-    await nextTick()
+    await new Promise(resolve => setTimeout(resolve, 0))
     
-    // 再次确保 expandedKeys 正确设置（双重保险）
-    await nextTick()
     expandedKeys.value = [...validExpandedKeys]
+    
+    if (featureTreeRef.value && validExpandedKeys.length > 0) {
+      featureTreeRef.value.setExpandedKeys(validExpandedKeys)
+    }
   } catch (error) {
     ElMessage.error('加载数据失败')
   }
@@ -1708,8 +1770,8 @@ const handleMoveNode = async (nodeId, command) => {
       
       if (getDontRemindAgain()) {
         await featureAPI.moveFeature(nodeId, null)
+        moveNodeInTree(featuresTree.value, nodeId, null)
         ElMessage.success('节点移动成功')
-        loadData()
       } else {
         moveConfirmData.sourceId = nodeId
         moveConfirmData.sourceName = currentNode.name
@@ -1757,9 +1819,9 @@ const handleConfirmMove = async () => {
     
     if (getDontRemindAgain()) {
       await featureAPI.moveFeature(moveForm.currentNodeId, moveForm.newParentId)
+      moveNodeInTree(featuresTree.value, moveForm.currentNodeId, moveForm.newParentId)
       ElMessage.success('节点移动成功')
       moveDialogVisible.value = false
-      loadData()
     } else {
       moveConfirmData.sourceId = moveForm.currentNodeId
       moveConfirmData.sourceName = moveForm.currentNodeName
@@ -2077,7 +2139,6 @@ const handleMoveConfirmOk = async () => {
       setDontRemindAgain(true)
     }
     
-    // 添加用户信息和角色信息
     let username = 'user'
     let userRole = 'developer'
     let user_id = '1'
@@ -2094,9 +2155,9 @@ const handleMoveConfirmOk = async () => {
       user_role: userRole,
       user_id: user_id
     })
+    moveNodeInTree(featuresTree.value, moveConfirmData.sourceId, moveConfirmData.targetId)
     ElMessage.success('节点移动成功')
     moveConfirmVisible.value = false
-    loadData()
   } catch (error) {
     if (error.response && error.response.status === 400) {
       ElMessage.error('移动失败：' + (error.response.data.message || '目标层级已存在同名节点'))
@@ -2104,14 +2165,12 @@ const handleMoveConfirmOk = async () => {
       ElMessage.error('移动失败：' + (error.response?.data?.message || '未知错误'))
     }
     moveConfirmVisible.value = false
-    loadData()
   }
 }
 
 // 处理取消移动
 const handleCancelMove = () => {
   moveConfirmVisible.value = false
-  loadData()
 }
 
 // 处理节点拖拽完成
@@ -2130,8 +2189,8 @@ const handleNodeDrop = async (draggingNode, dropNode, dropType, ev) => {
     
     if (getDontRemindAgain()) {
       await featureAPI.moveFeature(draggingNode.data.id, newParentId)
+      moveNodeInTree(featuresTree.value, draggingNode.data.id, newParentId)
       ElMessage.success('节点移动成功')
-      loadData()
     } else {
       moveConfirmData.sourceId = draggingNode.data.id
       moveConfirmData.sourceName = draggingNode.data.name
@@ -2147,7 +2206,6 @@ const handleNodeDrop = async (draggingNode, dropNode, dropType, ev) => {
     } else {
       ElMessage.error('移动失败：' + (error.response?.data?.message || '未知错误'))
     }
-    loadData()
   }
 }
 
@@ -2331,7 +2389,6 @@ const handleCopyFeature = (row) => {
 const handleSaveFeature = async () => {
   if (!featureFormRef.value) return
   
-  // 添加用户信息和角色信息
   let username = 'user'
   let userRole = 'developer'
   let user_id = '1'
@@ -2343,24 +2400,19 @@ const handleSaveFeature = async () => {
     console.error('Error getting localStorage:', error)
   }
   
-  // 转换动态字段为字符串格式
   if (featureForm.node_type === 'function') {
-    // 转换使用案例为简单的字符串格式
     featureForm.use_cases = useCasesList.value
       .map(item => item.value.trim())
       .filter(item => item)
       .join('\n')
     
-    // 转换视频为逗号分隔的字符串
     featureForm.videos = videosList.value
       .map(item => item.value.trim())
       .filter(item => item)
       .join(',')
     
-    // 处理设备字段
     featureForm.devices = selectedDevices.value.join(',')
     
-    // 处理是否支持引导字段，将字符串转换为布尔值
     featureForm.is_guide_supported = featureForm.is_guide_supported === 'true'
   }
   
@@ -2374,18 +2426,43 @@ const handleSaveFeature = async () => {
             user_role: userRole,
             user_id: user_id
           })
+          updateNodeInTree(featuresTree.value, featureForm.id, {
+            name: featureForm.name,
+            description: featureForm.description,
+            node_type: featureForm.node_type,
+            version_range: featureForm.version_range,
+            is_guide_supported: featureForm.is_guide_supported,
+            use_cases: featureForm.use_cases,
+            videos: featureForm.videos,
+            devices: featureForm.devices,
+            status: featureForm.status
+          })
           ElMessage.success(`${getNodeTypeLabel(featureForm.node_type)}节点更新成功`)
         } else {
-          await featureAPI.createFeature({
+          const response = await featureAPI.createFeature({
             ...featureForm,
             created_by: username,
             user_role: userRole,
             user_id: user_id
           })
+          const newNode = {
+            id: response.data.id,
+            name: featureForm.name,
+            description: featureForm.description,
+            node_type: featureForm.node_type,
+            parent_id: featureForm.parent_id,
+            version_range: featureForm.version_range || 'All',
+            is_guide_supported: featureForm.is_guide_supported,
+            use_cases: featureForm.use_cases || '',
+            videos: featureForm.videos || '',
+            devices: featureForm.devices || '',
+            status: userRole === 'admin' ? 'approved' : 'pending',
+            children: []
+          }
+          addNodeToTree(featuresTree.value, featureForm.parent_id, newNode)
           ElMessage.success(`${getNodeTypeLabel(featureForm.node_type)}节点添加成功`)
         }
         dialogVisible.value = false
-        loadData()
         selectedFeature.value = null
       } catch (error) {
         if (error.response && error.response.status === 400) {
@@ -2407,41 +2484,12 @@ const handleApproveFeature = async (id) => {
     } catch (error) {
       console.error('Error getting localStorage:', error)
     }
-    // 保存当前的展开状态，在审核通过前
-    const currentExpandedKeys = [...expandedKeys.value]
     
-    // 调用审核API
     await featureAPI.approveFeature(id, {
       approved_by: username
     })
+    updateNodeInTree(featuresTree.value, id, { status: 'approved' })
     ElMessage.success('节点审核通过成功')
-    
-    // 自定义加载数据，确保保存展开状态
-    // 保存当前的展开状态
-    const savedExpandedKeys = [...currentExpandedKeys]
-    
-    let userRole = 'developer'
-    let user_id = '1'
-    try {
-      userRole = localStorage.getItem('role') || 'developer'
-      user_id = localStorage.getItem('user_id') || '1'
-    } catch (error) {
-      console.error('Error getting localStorage:', error)
-    }
-    
-    const featuresResponse = await featureAPI.getFeatures(userRole, user_id)
-    featuresTree.value = featuresResponse.data.data
-    
-    await loadDevices()
-    
-    const allNodeIds = collectAllNodeIds(featuresTree.value)
-    const validExpandedKeys = savedExpandedKeys.filter(nodeId => allNodeIds.includes(nodeId))
-    
-    expandedKeys.value = [...validExpandedKeys]
-    
-    await nextTick()
-    await nextTick()
-    expandedKeys.value = [...validExpandedKeys]
     
     selectedFeature.value = null
   } catch (error) {
@@ -2462,12 +2510,12 @@ const handleWithdrawAudit = async (id) => {
     } catch (error) {
       console.error('Error getting localStorage:', error)
     }
-    // 调用撤回审核API
+    
     await featureAPI.withdrawAudit(id, {
       withdrawn_by: username
     })
+    updateNodeInTree(featuresTree.value, id, { status: 'pending' })
     ElMessage.success('审核撤回成功')
-    loadData()
     selectedFeature.value = null
   } catch (error) {
     ElMessage.error('撤回审核失败，请重试')
@@ -2483,7 +2531,6 @@ const handleDeleteFeature = async (id) => {
       type: 'warning'
     })
     
-    // 添加用户信息和角色信息
     let username = 'user'
     let userRole = 'developer'
     let user_id = '1'
@@ -2500,8 +2547,8 @@ const handleDeleteFeature = async (id) => {
       user_role: userRole,
       user_id: user_id
     })
+    removeNodeFromTree(featuresTree.value, id)
     ElMessage.success('节点删除成功')
-    loadData()
     selectedFeature.value = null
   } catch (error) {
     if (error !== 'cancel') {
