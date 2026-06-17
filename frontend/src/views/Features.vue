@@ -35,13 +35,12 @@
           <h3>功能树</h3>
           <el-tree
             ref="featureTreeRef"
-            :data="featuresTree"
+            :data="filteredFeaturesTree"
             node-key="id"
             :props="treeProps"
             :default-expand-all="false"
             :expand-on-click-node="false"
             :auto-expand-parent="false"
-            :filter-node-method="filterNode"
             @node-click="handleNodeClick"
             @node-expand="handleNodeExpand"
             @node-collapse="handleNodeCollapse"
@@ -926,38 +925,74 @@ const oldFeatureData = ref({})
 const guideOnly = ref(false)
 const searchQuery = ref('')
 
-const filterNode = (value, data) => {
-  if (!value) return true
-  try {
-    const parsed = JSON.parse(value)
-    if (parsed.guideOnly && data.node_type === 'function') {
-      if (data.is_guide_supported !== true && data.is_guide_supported !== 'true') {
-        return false
-      }
-    }
-    if (parsed.query) {
-      const nodeName = (data.name || '').toLowerCase()
-      if (!nodeName.includes(parsed.query.toLowerCase())) {
-        return false
-      }
-    }
-  } catch (e) {
-    return true
-  }
-  return true
-}
+const filteredFeaturesTree = computed(() => {
+  let result = featuresTree.value
 
-const applyTreeFilter = () => {
-  nextTick(() => {
-    if (featureTreeRef.value) {
-      const filterValue = JSON.stringify({
-        query: searchQuery.value,
-        guideOnly: guideOnly.value
-      })
-      featureTreeRef.value.filter(filterValue)
+  if (guideOnly.value) {
+    const filterByGuide = (nodes) => {
+      return nodes
+        .map(node => {
+          let filteredChildren = []
+          if (node.children && node.children.length > 0) {
+            filteredChildren = filterByGuide(node.children)
+          }
+
+          if (node.node_type === 'function') {
+            if (node.is_guide_supported === true || node.is_guide_supported === 'true') {
+              return { ...node, children: filteredChildren }
+            }
+            return null
+          } else if (node.node_type === 'category') {
+            if (filteredChildren.length > 0) {
+              return { ...node, children: filteredChildren }
+            }
+            return null
+          } else if (node.node_type === 'app') {
+            return { ...node, children: filteredChildren }
+          }
+          return null
+        })
+        .filter(node => node !== null)
     }
-  })
-}
+    result = filterByGuide(result)
+  }
+
+  if (searchQuery.value.trim()) {
+    const query = searchQuery.value.trim().toLowerCase()
+    const filterBySearch = (nodes) => {
+      return nodes
+        .map(node => {
+          let filteredChildren = []
+          if (node.children && node.children.length > 0) {
+            filteredChildren = filterBySearch(node.children)
+          }
+
+          if (node.node_type === 'function') {
+            const nodeName = (node.name || '').toLowerCase()
+            if (nodeName.includes(query)) {
+              return { ...node, children: filteredChildren }
+            }
+            return null
+          } else if (node.node_type === 'category') {
+            if (filteredChildren.length > 0) {
+              return { ...node, children: filteredChildren }
+            }
+            return null
+          } else if (node.node_type === 'app') {
+            if (filteredChildren.length > 0) {
+              return { ...node, children: filteredChildren }
+            }
+            return null
+          }
+          return null
+        })
+        .filter(node => node !== null)
+    }
+    result = filterBySearch(result)
+  }
+
+  return result
+})
 
 // 检查用户角色
 const isAdmin = computed(() => {
@@ -992,26 +1027,23 @@ const expandedKeys = ref([])
 // 搜索时展开所有匹配的节点
 watch(searchQuery, (newVal) => {
   if (newVal.trim()) {
-    const keys = []
-    const collectKeys = (nodes) => {
-      nodes.forEach(node => {
-        keys.push(node.id)
-        if (node.children && node.children.length > 0) {
-          collectKeys(node.children)
-        }
-      })
-    }
-    collectKeys(featuresTree.value)
-    expandedKeys.value = keys
-    if (featureTreeRef.value) {
-      featureTreeRef.value.setExpandedKeys(keys)
-    }
+    nextTick(() => {
+      const keys = []
+      const collectKeys = (nodes) => {
+        nodes.forEach(node => {
+          keys.push(node.id)
+          if (node.children && node.children.length > 0) {
+            collectKeys(node.children)
+          }
+        })
+      }
+      collectKeys(filteredFeaturesTree.value)
+      expandedKeys.value = keys
+      if (featureTreeRef.value) {
+        featureTreeRef.value.setExpandedKeys(keys)
+      }
+    })
   }
-  applyTreeFilter()
-})
-
-watch(guideOnly, () => {
-  applyTreeFilter()
 })
 
 // 对话框相关
