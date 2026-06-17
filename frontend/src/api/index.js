@@ -48,7 +48,7 @@ export const encryptPassword = async (password) => {
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 120000
+  timeout: 10000
 })
 
 // 添加请求拦截器，确保携带token
@@ -150,12 +150,7 @@ export const llmAPI = {
   getConfig: () => api.get('/llm/config'),
   saveConfig: (data) => api.post('/llm/config', data),
   testConnection: () => api.post('/llm/test'),
-  optimizeDescription: (featureId, description, parentId, featureName) => api.post('/llm/optimize', { 
-    feature_id: featureId, 
-    description: description,
-    parent_id: parentId,
-    feature_name: featureName
-  })
+  optimizeDescription: (featureId) => api.post('/llm/optimize', { feature_id: featureId })
 }
 
 export default api

@@ -1294,10 +1294,15 @@ const loadData = async () => {
     
     // 不强制刷新树组件，只更新数据和展开状态
     // 这样可以避免树的重新初始化导致展开状态丢失
+    // 直接更新 expandedKeys，不要改变 featureTreeKey 来避免树完全重新渲染
     expandedKeys.value = [...validExpandedKeys]
     
     // 给一些时间让Vue响应式更新
     await nextTick()
+    
+    // 再次确保 expandedKeys 正确设置（双重保险）
+    await nextTick()
+    expandedKeys.value = [...validExpandedKeys]
   } catch (error) {
     ElMessage.error('加载数据失败')
   }
@@ -2402,12 +2407,42 @@ const handleApproveFeature = async (id) => {
     } catch (error) {
       console.error('Error getting localStorage:', error)
     }
+    // 保存当前的展开状态，在审核通过前
+    const currentExpandedKeys = [...expandedKeys.value]
+    
     // 调用审核API
     await featureAPI.approveFeature(id, {
       approved_by: username
     })
     ElMessage.success('节点审核通过成功')
-    loadData()
+    
+    // 自定义加载数据，确保保存展开状态
+    // 保存当前的展开状态
+    const savedExpandedKeys = [...currentExpandedKeys]
+    
+    let userRole = 'developer'
+    let user_id = '1'
+    try {
+      userRole = localStorage.getItem('role') || 'developer'
+      user_id = localStorage.getItem('user_id') || '1'
+    } catch (error) {
+      console.error('Error getting localStorage:', error)
+    }
+    
+    const featuresResponse = await featureAPI.getFeatures(userRole, user_id)
+    featuresTree.value = featuresResponse.data.data
+    
+    await loadDevices()
+    
+    const allNodeIds = collectAllNodeIds(featuresTree.value)
+    const validExpandedKeys = savedExpandedKeys.filter(nodeId => allNodeIds.includes(nodeId))
+    
+    expandedKeys.value = [...validExpandedKeys]
+    
+    await nextTick()
+    await nextTick()
+    expandedKeys.value = [...validExpandedKeys]
+    
     selectedFeature.value = null
   } catch (error) {
     if (error.response && error.response.status === 400 && error.response.data.message === '该审核已失效') {
