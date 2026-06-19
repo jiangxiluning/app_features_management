@@ -69,7 +69,7 @@ python3 app.py
 pip3 install gunicorn
 
 # 使用Gunicorn启动服务
-gunicorn -w 4 -b 0.0.0.0:5001 app:app
+gunicorn -w 1 -b 0.0.0.0:5001 app:app
 ```
 
 ## 配置说明

@@ -132,8 +132,7 @@ const handleSaveDevice = async () => {
           device_model: deviceForm.device_model,
           description: deviceForm.description,
           release_name: deviceForm.release_name,
-          release_year: deviceForm.release_year,
-          user_role: localStorage.getItem('role') || 'developer'
+          release_year: deviceForm.release_year
         }
         
         if (deviceForm.id) {
@@ -164,9 +163,7 @@ const handleDeleteDevice = async (id) => {
       type: 'warning'
     })
     
-    await deviceAPI.deleteDevice(id, {
-      user_role: localStorage.getItem('role') || 'developer'
-    })
+    await deviceAPI.deleteDevice(id, {})
     
     ElMessage.success('设备删除成功')
     loadDevices()

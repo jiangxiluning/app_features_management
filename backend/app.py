@@ -1,6 +1,6 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Response, stream_with_context
 from flask_sqlalchemy import SQLAlchemy
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, decode_token
 from flask_cors import CORS
 from datetime import datetime, timedelta
 import os
@@ -11,8 +11,30 @@ import schedule
 import yaml
 import hashlib
 import sqlite3
+import json
+import queue
 from flask import request, send_from_directory
 from werkzeug.utils import secure_filename
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
+
+from consistency import (
+    admin_required,
+    apply_content_to_feature,
+    auth_required,
+    bump_revision,
+    check_maintenance,
+    check_revision_conflict,
+    dump_audit_content,
+    feature_snapshot,
+    feature_to_dict,
+    get_auth_context,
+    get_pending_audit,
+    merge_draft_into_dict,
+    parse_audit_content,
+    resolve_feature_view,
+    emit_data_change,
+)
 
 # 密码哈希函数（与前端兼容）
 def hash_password(password):
@@ -92,10 +114,16 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'supersecretkey1234567890abcdefghijklmnopqrstuvwxyz'
 app.config['JWT_SECRET_KEY'] = 'supersecretkey1234567890abcdefghijklmnopqrstuvwxyz'
 app.config['JWT_ERROR_MESSAGE_KEY'] = 'message'
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = False  # 开发环境禁用Token过期，方便测试
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=8)
 import os
-# 使用绝对路径来指定数据库文件的位置
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(os.path.dirname(__file__), 'instance', 'app_knowledge.db')
+# 使用绝对路径来指定数据库文件的位置（测试时可通过环境变量指向独立库）
+_test_db_uri = os.environ.get('PLAN_TEST_DATABASE_URI')
+if _test_db_uri:
+    app.config['SQLALCHEMY_DATABASE_URI'] = _test_db_uri
+else:
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(
+        os.path.dirname(__file__), 'instance', 'app_knowledge.db'
+    )
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # 服务器配置
@@ -111,6 +139,26 @@ BACKUP_ENABLED = config.get('backup', {}).get('enabled', True)
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
 CORS(app)
+
+# 维护模式（restore/import 期间阻断写入）
+maintenance_mode = False
+
+
+@event.listens_for(Engine, 'connect')
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    if isinstance(dbapi_connection, sqlite3.Connection):
+        cursor = dbapi_connection.cursor()
+        cursor.execute('PRAGMA journal_mode=WAL')
+        cursor.execute('PRAGMA busy_timeout=5000')
+        cursor.execute('PRAGMA foreign_keys=ON')
+        cursor.close()
+
+
+@app.before_request
+def before_request_maintenance():
+    blocked = check_maintenance(maintenance_mode)
+    if blocked:
+        return blocked
 
 # 数据库模型
 class User(db.Model):
@@ -146,6 +194,8 @@ class Feature(db.Model):
     created_by = db.Column(db.String(50), nullable=True)
     updated_by = db.Column(db.String(50), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    revision = db.Column(db.Integer, nullable=False, default=1)
+    updated_at = db.Column(db.DateTime, nullable=True)
 
 
 class Device(db.Model):
@@ -239,10 +289,28 @@ with app.app_context():
     
     # 尝试添加新字段（兼容性处理）
     try:
-        # 使用 SQLite 原始 SQL 添加新字段（如果不存在）
         from sqlalchemy import inspect
         inspector = inspect(db.engine)
-        columns = [col['name'] for col in inspector.get_columns('llm_config')]
+        if 'feature' in inspector.get_table_names():
+            feature_cols = [c['name'] for c in inspector.get_columns('feature')]
+            if 'revision' not in feature_cols:
+                with db.engine.connect() as conn:
+                    conn.execute(db.text(
+                        'ALTER TABLE feature ADD COLUMN revision INTEGER NOT NULL DEFAULT 1'
+                    ))
+                    conn.commit()
+            if 'updated_at' not in feature_cols:
+                with db.engine.connect() as conn:
+                    conn.execute(db.text(
+                        'ALTER TABLE feature ADD COLUMN updated_at DATETIME'
+                    ))
+                    conn.execute(db.text(
+                        'UPDATE feature SET updated_at = created_at WHERE updated_at IS NULL'
+                    ))
+                    conn.commit()
+        columns = []
+        if 'llm_config' in inspector.get_table_names():
+            columns = [col['name'] for col in inspector.get_columns('llm_config')]
         
         if 'no_proxy' not in columns:
             with db.engine.connect() as conn:
@@ -258,8 +326,8 @@ with app.app_context():
     except Exception as e:
         print(f'Database schema update: {e}')
     
-    # 创建默认管理员用户
-    if not User.query.filter_by(username='admin').first():
+    # 创建默认管理员用户（集成测试使用独立库时由测试脚本自行 seed）
+    if not _test_db_uri and not User.query.filter_by(username='admin').first():
         admin = User(username='admin', password=hash_password('admin'), role='admin')
         db.session.add(admin)
         db.session.commit()
@@ -341,12 +409,7 @@ def login():
         # 检查用户是否存在
         if not user:
             print(f"用户不存在: {data['username']}")
-            # 创建一个管理员用户，默认密码为 admin
-            admin = User(username='admin', password=hash_password('admin'), role='admin')
-            db.session.add(admin)
-            db.session.commit()
-            print(f"创建管理员用户成功: {admin.username}")
-            user = admin
+            return jsonify(message='用户名或密码错误'), 401
         
         print(f"用户存在: {user.username}, 数据库密码: {user.password}, 前端密码: {data['password']}")
         
@@ -390,13 +453,50 @@ def login():
         return jsonify(message='登录失败，请稍后重试'), 500
 
 
+@app.route('/api/events')
+def data_events_stream():
+    """SSE 数据变更推送（EventSource 通过 query token 鉴权）。"""
+    from sse_hub import subscribe, unsubscribe, format_sse
+
+    token = request.args.get('token')
+    if not token:
+        return jsonify(message='未授权访问'), 401
+    try:
+        decode_token(token)
+    except Exception:
+        return jsonify(message='无效或已过期的令牌'), 401
+
+    @stream_with_context
+    def generate():
+        q = subscribe()
+        try:
+            yield format_sse('connected', {'type': 'connected'})
+            while True:
+                try:
+                    event = q.get(timeout=25)
+                    yield format_sse('data_change', event)
+                except queue.Empty:
+                    yield ': keepalive\n\n'
+        except GeneratorExit:
+            pass
+        finally:
+            unsubscribe(q)
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
+
 @app.route('/api/auth/register', methods=['POST'])
+@admin_required
 def register():
     data = request.get_json()
-    # 只有管理员可以注册用户
-    user_role = data.get('user_role', 'developer')
-    if user_role != 'admin':
-        return jsonify(message='只有管理员可以注册用户'), 403
     
     if User.query.filter_by(username=data['username']).first():
         return jsonify(message='用户名已存在'), 400
@@ -411,12 +511,14 @@ def register():
 
 
 @app.route('/api/users', methods=['GET'])
+@admin_required
 def get_users():
     users = User.query.all()
     return jsonify([{'id': user.id, 'username': user.username, 'role': user.role} for user in users])
 
 
 @app.route('/api/users/<int:id>', methods=['PUT'])
+@admin_required
 def update_user(id):
     user = User.query.get(id)
     if not user:
@@ -432,6 +534,7 @@ def update_user(id):
 
 
 @app.route('/api/users/<int:id>', methods=['DELETE'])
+@admin_required
 def delete_user(id):
     user = User.query.get(id)
     if not user:
@@ -442,9 +545,11 @@ def delete_user(id):
 
 
 @app.route('/api/auth/change-password', methods=['POST'])
+@auth_required
 def change_password():
     data = request.get_json()
-    user = User.query.filter_by(username=data['username']).first()
+    ctx = get_auth_context()
+    user = User.query.filter_by(username=ctx['username']).first()
     
     # 检查用户是否存在
     if not user:
@@ -473,13 +578,18 @@ def change_password():
 
 
 @app.route('/api/user-apps', methods=['GET'])
+@admin_required
 def get_user_apps():
     user_apps = UserApp.query.all()
     return jsonify([{'id': ua.id, 'user_id': ua.user_id, 'app_id': ua.app_id} for ua in user_apps])
 
 
 @app.route('/api/user-apps/<int:user_id>', methods=['GET'])
+@auth_required
 def get_user_apps_by_user(user_id):
+    ctx = get_auth_context()
+    if ctx['role'] != 'admin' and ctx['user_id'] != user_id:
+        return jsonify(message='没有权限访问'), 403
     user = User.query.get(user_id)
     if user.role == 'admin':
         # 管理员拥有所有应用的权限
@@ -492,6 +602,7 @@ def get_user_apps_by_user(user_id):
 
 
 @app.route('/api/user-apps', methods=['POST'])
+@admin_required
 def add_user_app():
     data = request.get_json()
     user_id = data['user_id']
@@ -506,6 +617,7 @@ def add_user_app():
 
 
 @app.route('/api/user-apps/<int:id>', methods=['DELETE'])
+@admin_required
 def delete_user_app(id):
     user_app = UserApp.query.get(id)
     if not user_app:
@@ -516,6 +628,7 @@ def delete_user_app(id):
 
 
 @app.route('/api/audit-logs', methods=['GET'])
+@auth_required
 def get_audit_logs():
     feature_id = request.args.get('feature_id', type=int)
     created_by = request.args.get('created_by')
@@ -601,335 +714,257 @@ def get_audit_logs():
     return jsonify(result)
 
 
-@app.route('/api/audit-logs/<int:id>/approve', methods=['POST'])
-def approve_audit(id):
-    # 尝试通过 feature_id 查找审核记录
+def _find_pending_audit_log(id):
     log = AuditLog.query.filter_by(feature_id=id, status='pending').first()
     if not log:
-        # 如果找不到，尝试通过 id 查找审核记录（保持向后兼容）
         log = AuditLog.query.get(id)
-        if not log:
-            return jsonify(message='审核记录不存在'), 404
-    # 检查审核记录是否已经被处理
-    if log.status != 'pending':
-        return jsonify(message='该审核已失效'), 400
-    log.status = 'approved'
-    log.approved_by = request.get_json().get('approved_by')
-    log.approved_at = datetime.utcnow()
-    # 更新feature状态或删除节点
+    return log
+
+
+def _reject_or_withdraw_feature(log, feature, final_status):
+    if not feature:
+        return
+    if log.action == 'create':
+        delete_feature_recursive(feature)
+    elif log.action in ('update', 'move') and log.before_content:
+        before_content = parse_audit_content(log.before_content)
+        if before_content:
+            apply_content_to_feature(feature, before_content)
+        feature.status = 'approved'
+    elif log.action == 'delete':
+        feature.status = 'approved'
+    else:
+        feature.status = final_status if final_status != 'approved' else 'approved'
+
+
+@app.route('/api/audit-logs/<int:id>/approve', methods=['POST'])
+@admin_required
+def approve_audit(id):
+    log = _find_pending_audit_log(id)
+    if not log:
+        return jsonify(message='审核记录不存在'), 404
+
+    data = request.get_json() or {}
+    ctx = get_auth_context()
+    approved_by = data.get('approved_by') or ctx.get('username')
+
+    updated = AuditLog.query.filter_by(id=log.id, status='pending').update({
+        'status': 'approved',
+        'approved_by': approved_by,
+        'approved_at': datetime.utcnow(),
+    })
+    if not updated:
+        return jsonify(message='该审核已失效'), 409
+
+    db.session.expire(log)
+    log = AuditLog.query.get(log.id)
     feature = Feature.query.get(log.feature_id)
+
     if feature:
-        # 对于删除操作，批准后删除节点
         if log.action == 'delete':
-            # 递归删除子节点
-            def delete_feature_recursive(feature):
-                for child in feature.children:
-                    delete_feature_recursive(child)
-                db.session.delete(feature)
             delete_feature_recursive(feature)
         else:
-            # 对于其他操作，更新状态并递归更新祖先节点状态
+            after_content = parse_audit_content(log.after_content)
+            if after_content and log.action in ('update', 'move'):
+                apply_content_to_feature(feature, after_content)
             feature.status = 'approved'
-            # 递归更新所有祖先节点的状态
+            bump_revision(feature)
+
             def approve_ancestors(node):
                 if node.parent_id:
                     parent = Feature.query.get(node.parent_id)
                     if parent and parent.status == 'pending':
                         parent.status = 'approved'
-                        # 查找并更新父节点的审核记录
-                        parent_audit = AuditLog.query.filter_by(feature_id=parent.id, status='pending').first()
-                        if parent_audit:
-                            parent_audit.status = 'approved'
-                            parent_audit.approved_by = request.get_json().get('approved_by')
-                            parent_audit.approved_at = datetime.utcnow()
+                        parent_logs = AuditLog.query.filter_by(
+                            feature_id=parent.id, status='pending'
+                        ).all()
+                        for parent_log in parent_logs:
+                            AuditLog.query.filter_by(
+                                id=parent_log.id, status='pending'
+                            ).update({
+                                'status': 'approved',
+                                'approved_by': approved_by,
+                                'approved_at': datetime.utcnow(),
+                            })
                         approve_ancestors(parent)
+
             approve_ancestors(feature)
+
     db.session.commit()
+    emit_data_change('audit_approved', actor=approved_by, scope='audit', resource_id=log.feature_id)
+    emit_data_change('features_changed', actor=approved_by, scope='features', resource_id=log.feature_id)
     return jsonify(message='审核通过')
 
 
 @app.route('/api/audit-logs/<int:id>/reject', methods=['POST'])
+@admin_required
 def reject_audit(id):
-    # 尝试通过 feature_id 查找审核记录
-    log = AuditLog.query.filter_by(feature_id=id, status='pending').first()
+    log = _find_pending_audit_log(id)
     if not log:
-        # 如果找不到，尝试通过 id 查找审核记录（保持向后兼容）
-        log = AuditLog.query.get(id)
-        if not log:
-            return jsonify(message='审核记录不存在'), 404
-    # 检查审核记录是否已经被处理
+        return jsonify(message='审核记录不存在'), 404
+
     if log.status != 'pending':
         return jsonify(message='该审核已失效'), 400
+
+    data = request.get_json() or {}
+    ctx = get_auth_context()
     log.status = 'rejected'
-    log.approved_by = request.get_json().get('approved_by')
+    log.approved_by = data.get('approved_by') or ctx.get('username')
     log.approved_at = datetime.utcnow()
-    # 更新feature状态或删除节点
+
     feature = Feature.query.get(log.feature_id)
-    if feature:
-        # 对于新增的节点，拒绝审核后删除该节点
-        if log.action == 'create':
-            # 递归删除子节点
-            def delete_feature_recursive(feature):
-                for child in feature.children:
-                    delete_feature_recursive(child)
-                db.session.delete(feature)
-            delete_feature_recursive(feature)
-        # 对于修改的节点，拒绝审核后恢复原始值
-        elif log.action == 'update' and log.before_content:
-            try:
-                # 尝试解析before_content为字典
-                import ast
-                before_content = ast.literal_eval(log.before_content)
-                # 恢复原始值
-                feature.name = before_content.get('name', feature.name)
-                feature.description = before_content.get('description', feature.description)
-                feature.use_cases = before_content.get('use_cases', feature.use_cases)
-                feature.videos = before_content.get('videos', feature.videos)
-                feature.version_range = before_content.get('version_range', feature.version_range)
-                feature.parent_id = before_content.get('parent_id', feature.parent_id)
-                feature.node_type = before_content.get('node_type', feature.node_type)
-                feature.is_guide_supported = before_content.get('is_guide_supported', feature.is_guide_supported)
-                feature.devices = before_content.get('devices', feature.devices)
-                feature.status = 'approved'  # 恢复为已审核状态
-            except Exception as e:
-                print(f"Error parsing before_content: {e}")
-                feature.status = 'rejected'
-        # 对于删除操作，拒绝审核后恢复节点状态
-        elif log.action == 'delete':
-            feature.status = 'approved'  # 恢复为已审核状态
-        else:
-            # 对于其他操作，只是修改状态
-            feature.status = 'rejected'
+    _reject_or_withdraw_feature(log, feature, 'rejected')
+
     db.session.commit()
+    emit_data_change('audit_rejected', actor=log.approved_by, scope='audit', resource_id=log.feature_id)
+    emit_data_change('features_changed', actor=log.approved_by, scope='features', resource_id=log.feature_id)
     return jsonify(message='审核拒绝')
 
 
 @app.route('/api/audit-logs/<int:id>/withdraw', methods=['POST'])
+@auth_required
 def withdraw_audit(id):
-    # 尝试通过 feature_id 查找审核记录
-    log = AuditLog.query.filter_by(feature_id=id, status='pending').first()
+    log = _find_pending_audit_log(id)
     if not log:
-        # 如果找不到，尝试通过 id 查找审核记录（保持向后兼容）
-        log = AuditLog.query.get(id)
-        if not log:
-            return jsonify(message='审核记录不存在'), 404
-    # 检查审核记录是否已经被处理
+        return jsonify(message='审核记录不存在'), 404
+
     if log.status != 'pending':
         return jsonify(message='该审核已失效'), 400
-    # 只有创建者可以撤回审核
-    withdrawn_by = request.get_json().get('withdrawn_by')
+
+    ctx = get_auth_context()
+    withdrawn_by = (request.get_json() or {}).get('withdrawn_by') or ctx.get('username')
     if log.created_by != withdrawn_by:
         return jsonify(message='只有创建者可以撤回审核'), 403
+
     log.status = 'withdrawn'
     log.approved_by = withdrawn_by
     log.approved_at = datetime.utcnow()
-    # 更新feature状态或恢复原始值
+
     feature = Feature.query.get(log.feature_id)
-    if feature:
-        # 对于新增的节点，撤回审核后删除该节点
-        if log.action == 'create':
-            # 递归删除子节点
-            def delete_feature_recursive(feature):
-                for child in feature.children:
-                    delete_feature_recursive(child)
-                db.session.delete(feature)
-            delete_feature_recursive(feature)
-        # 对于修改的节点，撤回审核后恢复原始值
-        elif log.action == 'update' and log.before_content:
-            try:
-                # 尝试解析before_content为字典
-                import ast
-                before_content = ast.literal_eval(log.before_content)
-                # 恢复原始值
-                feature.name = before_content.get('name', feature.name)
-                feature.description = before_content.get('description', feature.description)
-                feature.use_cases = before_content.get('use_cases', feature.use_cases)
-                feature.videos = before_content.get('videos', feature.videos)
-                feature.version_range = before_content.get('version_range', feature.version_range)
-                feature.parent_id = before_content.get('parent_id', feature.parent_id)
-                feature.node_type = before_content.get('node_type', feature.node_type)
-                feature.is_guide_supported = before_content.get('is_guide_supported', feature.is_guide_supported)
-                feature.devices = before_content.get('devices', feature.devices)
-                feature.status = 'approved'  # 恢复为已审核状态
-            except Exception as e:
-                print(f"Error parsing before_content: {e}")
-                feature.status = 'withdrawn'
-        # 对于删除操作，撤回审核后恢复节点状态
-        elif log.action == 'delete':
-            feature.status = 'approved'  # 恢复为已审核状态
-        else:
-            # 对于其他操作，只是修改状态
-            feature.status = 'withdrawn'
+    _reject_or_withdraw_feature(log, feature, 'approved')
+
     db.session.commit()
+    emit_data_change('audit_withdrawn', actor=withdrawn_by, scope='audit', resource_id=log.feature_id)
+    emit_data_change('features_changed', actor=withdrawn_by, scope='features', resource_id=log.feature_id)
     return jsonify(message='审核撤回成功')
 
 @app.route('/api/features', methods=['GET'])
+@auth_required
 def get_features():
-    # 获取用户角色和ID
-    user_role = request.args.get('user_role', 'admin')
-    user_id = request.args.get('user_id', None)
-    
-    # 获取分页参数
+    ctx = get_auth_context()
+    user_role = ctx['role']
+    user_id = ctx['user_id']
+    viewer_username = ctx['username']
+    include_pending = request.args.get('include_pending', 'false').lower() == 'true'
+    if user_role != 'admin':
+        include_pending = False
+
     page = request.args.get('page', 1, type=int)
     page_size = request.args.get('page_size', 20, type=int)
-    
-    # 获取所有功能
+
     all_features = Feature.query.all()
     feature_map = {}
-    
-    # 先将所有功能放入映射表
+
     for feature in all_features:
-        feature_map[feature.id] = {
-            'id': feature.id,
-            'name': feature.name,
-            'description': feature.description,
-            'use_cases': feature.use_cases,
-            'videos': feature.videos,
-            'version_range': feature.version_range,
-            'parent_id': feature.parent_id,
-            'node_type': feature.node_type,
-            'status': feature.status,
-            'is_guide_supported': feature.is_guide_supported,
-            'devices': feature.devices,
-            'created_by': feature.created_by,
-            'updated_by': feature.updated_by,
-            'created_at': feature.created_at.isoformat(),
-            'children': []
-        }
-    
-    # 构建树形结构
+        view_data = resolve_feature_view(
+            feature, AuditLog, user_role, viewer_username, include_pending
+        )
+        if view_data is None:
+            continue
+        feature_map[feature.id] = view_data
+
     tree = []
-    
+
     if user_role == 'admin':
-        # 管理员可以查看所有应用
         for feature_id, feature_data in feature_map.items():
             parent_id = feature_data['parent_id']
             if parent_id is None:
-                # 根节点
                 tree.append(feature_data)
-            else:
-                # 子节点
-                if parent_id in feature_map:
-                    feature_map[parent_id]['children'].append(feature_data)
+            elif parent_id in feature_map:
+                feature_map[parent_id]['children'].append(feature_data)
     else:
-        # 开发只能查看被授权的应用
         if user_id:
-            # 获取用户授权的应用
             user_apps = UserApp.query.filter_by(user_id=user_id).all()
             authorized_app_ids = [ua.app_id for ua in user_apps]
-            
-            # 构建授权应用的树形结构
             authorized_feature_ids = set()
-            
-            # 收集授权应用及其所有子节点
+
             for app_id in authorized_app_ids:
                 if app_id in feature_map:
-                    # 添加应用本身
                     authorized_feature_ids.add(app_id)
-                    # 递归添加所有子节点
+
                     def add_children(feature_id):
-                        if feature_id in feature_map:
-                            for child_id, child_data in feature_map.items():
-                                if child_data['parent_id'] == feature_id:
-                                    authorized_feature_ids.add(child_id)
-                                    add_children(child_id)
+                        for child_id, child_data in feature_map.items():
+                            if child_data['parent_id'] == feature_id:
+                                authorized_feature_ids.add(child_id)
+                                add_children(child_id)
+
                     add_children(app_id)
-            
-            # 构建树形结构
+
             for feature_id, feature_data in feature_map.items():
                 if feature_id in authorized_feature_ids:
                     parent_id = feature_data['parent_id']
                     if parent_id is None:
-                        # 根节点
                         tree.append(feature_data)
-                    else:
-                        # 子节点
-                        if parent_id in authorized_feature_ids and parent_id in feature_map:
-                            feature_map[parent_id]['children'].append(feature_data)
-    
-    # 计算总记录数
-    total = len(all_features)
-    
-    # 构建响应
-    response = {
+                    elif parent_id in authorized_feature_ids and parent_id in feature_map:
+                        feature_map[parent_id]['children'].append(feature_data)
+
+    return jsonify({
         'data': tree,
-        'total': total,
+        'total': len(all_features),
         'page': page,
-        'page_size': page_size
-    }
-    
-    return jsonify(response)
+        'page_size': page_size,
+    })
+
+def get_app_root_id(node_id):
+    node = Feature.query.get(node_id)
+    while node and node.parent_id:
+        node = Feature.query.get(node.parent_id)
+    return node.id if node else None
+
 
 @app.route('/api/features', methods=['POST'])
+@auth_required
 def create_feature():
     data = request.get_json()
+    ctx = get_auth_context()
+    user_role = ctx['role']
+    user_id = ctx['user_id']
+    created_by = data.get('created_by') or ctx['username']
     
-    # 验证必填字段
     if not data.get('name'):
         return jsonify(message='节点名称是必选项'), 400
     if not data.get('description'):
         return jsonify(message='节点描述是必选项'), 400
     
-    # 验证同层级节点名称是否唯一
     parent_id = data.get('parent_id')
     name = data['name']
     node_type = data.get('node_type', 'function')
-    created_by = data.get('created_by', 'system')
-    user_role = data.get('user_role', 'admin')
-    user_id = data.get('user_id', None)
     
-    # 验证功能节点不能是根节点
     if node_type == 'function' and parent_id is None:
         return jsonify(message='功能节点不能是根节点'), 400
     
-    # 验证功能节点的必填字段
     if node_type == 'function':
         if not data.get('version_range'):
             return jsonify(message='版本范围是必选项'), 400
         if 'is_guide_supported' not in data:
             return jsonify(message='是否支持引导是必选项'), 400
     
-    # 权限检查：只有管理员可以添加应用节点
     if node_type == 'app' and user_role != 'admin':
         return jsonify(message='只有管理员可以添加应用节点'), 403
     
-    # 不再检查父节点状态，允许在未审核的分类节点下添加子节点
-    
-    # 权限检查：开发只能在被授权的应用中创建节点
     if user_role != 'admin' and user_id:
-        # 获取用户授权的应用
         user_apps = UserApp.query.filter_by(user_id=user_id).all()
         authorized_app_ids = [ua.app_id for ua in user_apps]
-        
-        # 检查父节点是否在授权的应用中
         if parent_id:
-            # 获取父节点所属的应用
-            def get_app_root(node_id):
-                node = Feature.query.get(node_id)
-                while node.parent_id:
-                    node = Feature.query.get(node.parent_id)
-                return node.id
-            
-            app_id = get_app_root(parent_id)
+            app_id = get_app_root_id(parent_id)
             if app_id not in authorized_app_ids:
                 return jsonify(message='您没有权限在该应用中创建节点'), 403
     
-    existing_feature = Feature.query.filter_by(
-        parent_id=parent_id,
-        name=name
-    ).first()
-    
-    if existing_feature:
+    if Feature.query.filter_by(parent_id=parent_id, name=name).first():
         return jsonify(message='同一层级已存在同名节点'), 400
     
-    # 设置状态
     status = 'approved' if user_role == 'admin' else 'pending'
-    
-    # 只有功能节点需要is_guide_supported字段
-    is_guide_supported = False
-    if node_type == 'function':
-        # 确保is_guide_supported是布尔值
-        is_guide_supported = bool(data.get('is_guide_supported', False))
+    is_guide_supported = bool(data.get('is_guide_supported', False)) if node_type == 'function' else False
     
     feature = Feature(
         name=name,
@@ -943,210 +978,143 @@ def create_feature():
         is_guide_supported=is_guide_supported,
         devices=data.get('devices'),
         created_by=created_by,
-        updated_by=created_by
+        updated_by=created_by,
+        revision=1,
+        updated_at=datetime.utcnow(),
     )
     db.session.add(feature)
-    db.session.flush()  # 获取feature.id
+    db.session.flush()
     
-    # 如果创建的是应用节点，自动为其创建一个 0.0.0.0 版本号
     if node_type == 'app':
-        # 检查是否已存在 0.0.0.0 版本
-        existing_version = AppVersion.query.filter_by(app_id=feature.id, version='0.0.0.0').first()
-        if not existing_version:
-            new_version = AppVersion(
-                app_id=feature.id,
-                version='0.0.0.0',
-                changelog='初始版本'
-            )
-            db.session.add(new_version)
+        if not AppVersion.query.filter_by(app_id=feature.id, version='0.0.0.0').first():
+            db.session.add(AppVersion(
+                app_id=feature.id, version='0.0.0.0', changelog='初始版本'
+            ))
     
-    # 非管理员创建的需要审核
     if user_role != 'admin':
-        # 删除该节点之前的未审核记录
         AuditLog.query.filter_by(feature_id=feature.id, status='pending').delete()
-        
-        # 保存创建后的内容
-        after_content = {
-            'name': feature.name,
-            'description': feature.description,
-            'use_cases': feature.use_cases,
-            'videos': feature.videos,
-            'version_range': feature.version_range,
-            'parent_id': feature.parent_id,
-            'node_type': feature.node_type,
-            'is_guide_supported': feature.is_guide_supported,
-            'devices': feature.devices
-        }
-        
-        audit_log = AuditLog(
+        after_content = feature_snapshot(feature)
+        db.session.add(AuditLog(
             feature_id=feature.id,
             action='create',
             status='pending',
-            created_by=created_by or 'user',
-            after_content=str(after_content)
-        )
-        db.session.add(audit_log)
+            created_by=created_by,
+            after_content=dump_audit_content(after_content),
+        ))
+    else:
+        bump_revision(feature)
     
     db.session.commit()
-    return jsonify(id=feature.id, message='节点添加成功')
+    if user_role != 'admin':
+        emit_data_change('audit_submitted', actor=created_by, scope='audit', resource_id=feature.id)
+    emit_data_change('features_changed', actor=created_by, scope='features', resource_id=feature.id)
+    return jsonify(id=feature.id, message='节点添加成功', revision=feature.revision)
+
+def _build_after_content_from_data(feature, data, parent_id, node_type):
+    after = feature_snapshot(feature)
+    after['name'] = data.get('name', feature.name)
+    after['description'] = data.get('description', feature.description)
+    after['parent_id'] = parent_id
+    after['node_type'] = node_type
+    if feature.node_type == 'function' or node_type == 'function':
+        after['use_cases'] = data.get('use_cases', feature.use_cases)
+        after['videos'] = data.get('videos', feature.videos)
+        after['version_range'] = data.get('version_range', feature.version_range)
+        after['is_guide_supported'] = bool(
+            data.get('is_guide_supported', feature.is_guide_supported)
+        )
+        after['devices'] = data.get('devices', feature.devices)
+    elif node_type in ('app', 'category'):
+        after['is_guide_supported'] = False
+    return after
+
 
 @app.route('/api/features/<int:id>', methods=['PUT'])
+@auth_required
 def update_feature(id):
     feature = Feature.query.get(id)
     if not feature:
         return jsonify(message='节点不存在'), 404
-    data = request.get_json()
-    
 
-    
-    # 验证待审核的节点在未被审核前不允许编辑
-    if feature.status == 'pending':
+    data = request.get_json() or {}
+    ctx = get_auth_context()
+    user_role = ctx['role']
+    user_id = ctx['user_id']
+    updated_by = data.get('updated_by') or ctx['username']
+
+    if get_pending_audit(AuditLog, feature.id) and user_role != 'admin':
         return jsonify(message='待审核的节点在未被审核前不允许编辑'), 400
-    
-    # 验证必填字段
+
     if 'name' in data and not data['name']:
         return jsonify(message='节点名称是必选项'), 400
     if 'description' in data and not data['description']:
         return jsonify(message='节点描述是必选项'), 400
-    
-    # 验证功能节点的必填字段
+
     if feature.node_type == 'function':
         if 'version_range' in data and not data['version_range']:
             return jsonify(message='版本范围是必选项'), 400
         if 'is_guide_supported' in data and data['is_guide_supported'] is None:
             return jsonify(message='是否支持引导是必选项'), 400
-    
-    # 验证功能节点不能是根节点
+
     parent_id = data.get('parent_id', feature.parent_id)
     node_type = data.get('node_type', feature.node_type)
-    updated_by = data.get('updated_by', 'system')
-    user_role = data.get('user_role', 'admin')
-    user_id = data.get('user_id', None)
-    
+
     if node_type == 'function' and parent_id is None:
         return jsonify(message='功能节点不能是根节点'), 400
-    
-    # 权限检查：开发只能修改被授权的应用的相关数据
+
     if user_role != 'admin' and user_id:
-        # 获取用户授权的应用
         user_apps = UserApp.query.filter_by(user_id=user_id).all()
         authorized_app_ids = [ua.app_id for ua in user_apps]
-        
-        # 检查节点是否在授权的应用中
-        # 获取节点所属的应用
-        def get_app_root(node_id):
-            node = Feature.query.get(node_id)
-            while node.parent_id:
-                node = Feature.query.get(node.parent_id)
-            return node.id
-        
-        app_id = get_app_root(feature.id)
+        app_id = get_app_root_id(feature.id)
         if app_id not in authorized_app_ids:
             return jsonify(message='您没有权限修改该节点'), 403
-    
-    # 验证同层级节点名称是否唯一
+
     if 'name' in data and data['name'] != feature.name:
-        name = data['name']
-        
-        existing_feature = Feature.query.filter_by(
-            parent_id=parent_id,
-            name=name
-        ).filter(Feature.id != id).first()
-        
-        if existing_feature:
+        if Feature.query.filter_by(parent_id=parent_id, name=data['name']).filter(
+            Feature.id != id
+        ).first():
             return jsonify(message='同一层级已存在同名节点'), 400
-    
-    # 设置状态
-    status = 'approved' if user_role == 'admin' else 'pending'
-    
-    # 保存修改前的状态
-    old_status = feature.status
-    
-    # 保存修改前的内容
-    before_content = {
-        'name': feature.name,
-        'description': feature.description,
-        'use_cases': feature.use_cases,
-        'videos': feature.videos,
-        'version_range': feature.version_range,
-        'parent_id': feature.parent_id,
-        'node_type': feature.node_type,
-        'is_guide_supported': feature.is_guide_supported,
-        'devices': feature.devices
-    }
-    
-    # 更新feature对象
-    feature.name = data.get('name', feature.name)
-    feature.description = data.get('description', feature.description)
-    # 只有功能节点才能修改其他字段
-    if feature.node_type == 'function':
-        feature.use_cases = data.get('use_cases', feature.use_cases)
-        feature.videos = data.get('videos', feature.videos)
-        feature.version_range = data.get('version_range', feature.version_range)
-        # 确保is_guide_supported是布尔值
-        feature.is_guide_supported = bool(data.get('is_guide_supported', feature.is_guide_supported))
-        feature.devices = data.get('devices', feature.devices)
-    # 对于应用和分类节点，确保is_guide_supported为False
-    elif feature.node_type in ['app', 'category']:
-        feature.is_guide_supported = False
-    feature.parent_id = parent_id
-    feature.node_type = node_type
-    feature.status = status
-    feature.updated_by = updated_by
-    
-    # 管理员编辑待审核功能时自动审核通过
-    if user_role == 'admin' and old_status == 'pending':
-        # 查找并更新该节点的审核记录
-        pending_logs = AuditLog.query.filter_by(feature_id=feature.id, status='pending').all()
-        for log in pending_logs:
-            log.status = 'approved'
-            log.approved_by = updated_by
-            log.approved_at = datetime.utcnow()
-        
-        # 递归更新所有祖先节点的状态
-        def approve_ancestors(node):
-            if node.parent_id:
-                parent = Feature.query.get(node.parent_id)
-                if parent and parent.status == 'pending':
-                    parent.status = 'approved'
-                    # 查找并更新父节点的审核记录
-                    parent_logs = AuditLog.query.filter_by(feature_id=parent.id, status='pending').all()
-                    for parent_log in parent_logs:
-                        parent_log.status = 'approved'
-                        parent_log.approved_by = updated_by
-                        parent_log.approved_at = datetime.utcnow()
-                    approve_ancestors(parent)
-        approve_ancestors(feature)
-    # 非管理员更新的需要审核
-    elif user_role != 'admin':
-        # 保存修改后的内容
-        after_content = {
-            'name': feature.name,
-            'description': feature.description,
-            'use_cases': feature.use_cases,
-            'videos': feature.videos,
-            'version_range': feature.version_range,
-            'parent_id': feature.parent_id,
-            'node_type': feature.node_type,
-            'is_guide_supported': feature.is_guide_supported,
-            'devices': feature.devices
-        }
-        
-        # 删除该节点之前的未审核记录
+
+    before_content = feature_snapshot(feature)
+    after_content = _build_after_content_from_data(feature, data, parent_id, node_type)
+
+    if user_role != 'admin':
         AuditLog.query.filter_by(feature_id=feature.id, status='pending').delete()
-        
-        audit_log = AuditLog(
+        feature.status = 'pending'
+        feature.updated_by = updated_by
+        db.session.add(AuditLog(
             feature_id=feature.id,
             action='update',
             status='pending',
-            created_by=updated_by or 'user',
-            before_content=str(before_content),
-            after_content=str(after_content)
-        )
-        db.session.add(audit_log)
-    
+            created_by=updated_by,
+            before_content=dump_audit_content(before_content),
+            after_content=dump_audit_content(after_content),
+        ))
+    else:
+        conflict = check_revision_conflict(feature, data)
+        if conflict:
+            return conflict
+        apply_content_to_feature(feature, after_content)
+        if feature.node_type in ['app', 'category']:
+            feature.is_guide_supported = False
+        feature.status = 'approved'
+        feature.updated_by = updated_by
+        bump_revision(feature)
+
+        if get_pending_audit(AuditLog, feature.id):
+            pending_logs = AuditLog.query.filter_by(
+                feature_id=feature.id, status='pending'
+            ).all()
+            for log in pending_logs:
+                log.status = 'approved'
+                log.approved_by = updated_by
+                log.approved_at = datetime.utcnow()
+
     db.session.commit()
-    return jsonify(message='节点更新成功')
+    if user_role != 'admin':
+        emit_data_change('audit_submitted', actor=updated_by, scope='audit', resource_id=feature.id)
+    emit_data_change('features_changed', actor=updated_by, scope='features', resource_id=feature.id)
+    return jsonify(message='节点更新成功', revision=feature.revision)
 
 def delete_feature_recursive(feature):
     # 递归删除子节点
@@ -1160,100 +1128,64 @@ def delete_feature_recursive(feature):
     db.session.delete(feature)
 
 @app.route('/api/features/<int:id>', methods=['DELETE'])
+@auth_required
 def delete_feature(id):
     feature = Feature.query.get(id)
     if not feature:
         return jsonify(message='节点不存在'), 404
-    
-    data = request.get_json()
-    deleted_by = data.get('deleted_by', 'system')
-    user_role = data.get('user_role', 'admin')
-    user_id = data.get('user_id', None)
-    
-    # 权限检查：开发只能删除被授权的应用的相关数据
+
+    data = request.get_json() or {}
+    ctx = get_auth_context()
+    user_role = ctx['role']
+    user_id = ctx['user_id']
+    deleted_by = data.get('deleted_by') or ctx['username']
+
     if user_role != 'admin' and user_id:
-        # 获取用户授权的应用
         user_apps = UserApp.query.filter_by(user_id=user_id).all()
         authorized_app_ids = [ua.app_id for ua in user_apps]
-        
-        # 检查节点是否在授权的应用中
-        # 获取节点所属的应用
-        def get_app_root(node_id):
-            node = Feature.query.get(node_id)
-            while node.parent_id:
-                node = Feature.query.get(node.parent_id)
-            return node.id
-        
-        app_id = get_app_root(feature.id)
+        app_id = get_app_root_id(feature.id)
         if app_id not in authorized_app_ids:
             return jsonify(message='您没有权限删除该节点'), 403
-    
-    # 非管理员删除的需要审核
+
+    pending_log = get_pending_audit(AuditLog, feature.id)
+
     if user_role != 'admin':
-        # 检查节点状态，如果是未审核的，则直接删除
-        if feature.status == 'pending':
-            # 查找并更新该节点的审核记录为驳回
-            pending_logs = AuditLog.query.filter_by(feature_id=feature.id, status='pending').all()
-            for log in pending_logs:
-                log.status = 'rejected'
-                log.approved_by = deleted_by
-                log.approved_at = datetime.utcnow()
-            
-            # 直接删除未审核的节点
+        if pending_log and pending_log.action == 'create':
+            pending_log.status = 'rejected'
+            pending_log.approved_by = deleted_by
+            pending_log.approved_at = datetime.utcnow()
             delete_feature_recursive(feature)
             db.session.commit()
+            emit_data_change('features_changed', actor=deleted_by, scope='features', resource_id=id)
             return jsonify(message='节点删除成功，审核已驳回')
-        else:
-            # 保存删除前的内容
-            before_content = {
-                'name': feature.name,
-                'description': feature.description,
-                'use_cases': feature.use_cases,
-                'videos': feature.videos,
-                'version_range': feature.version_range,
-                'parent_id': feature.parent_id,
-                'node_type': feature.node_type
-            }
-            
-            # 删除该节点之前的未审核记录
-            AuditLog.query.filter_by(feature_id=feature.id, status='pending').delete()
-            
-            audit_log = AuditLog(
-                feature_id=feature.id,
-                action='delete',
-                status='pending',
-                created_by=deleted_by or 'user',
-                before_content=str(before_content)
-            )
-            db.session.add(audit_log)
-            feature.status = 'pending'
-            db.session.commit()
-            return jsonify(message='删除请求已提交，等待审核')
-    else:
-        # 检查节点状态，如果是未审核的，则更新审核记录为驳回
-        if feature.status == 'pending':
-            # 查找并更新该节点的审核记录为驳回
-            pending_logs = AuditLog.query.filter_by(feature_id=feature.id, status='pending').all()
-            for log in pending_logs:
-                log.status = 'rejected'
-                log.approved_by = deleted_by
-                log.approved_at = datetime.utcnow()
-        
-        # 管理员直接删除
-        # 注意：不要删除审核记录，保留被驳回的记录
-        def delete_feature_recursive_no_audit(feature):
-            # 递归删除子节点
-            for child in feature.children:
-                delete_feature_recursive_no_audit(child)
-            # 如果是应用节点，删除关联的版本记录
-            if feature.node_type == 'app':
-                AppVersion.query.filter_by(app_id=feature.id).delete()
-            # 只删除节点本身，不删除审核记录
-            db.session.delete(feature)
-        
-        delete_feature_recursive_no_audit(feature)
+        if pending_log:
+            return jsonify(message='待审核的节点在未被审核前不允许删除'), 400
+
+        before_content = feature_snapshot(feature)
+        AuditLog.query.filter_by(feature_id=feature.id, status='pending').delete()
+        db.session.add(AuditLog(
+            feature_id=feature.id,
+            action='delete',
+            status='pending',
+            created_by=deleted_by,
+            before_content=dump_audit_content(before_content),
+        ))
+        feature.status = 'pending'
+        feature.updated_by = deleted_by
         db.session.commit()
-        return jsonify(message='节点删除成功')
+        emit_data_change('audit_submitted', actor=deleted_by, scope='audit', resource_id=id)
+        emit_data_change('features_changed', actor=deleted_by, scope='features', resource_id=id)
+        return jsonify(message='删除请求已提交，等待审核')
+
+    if pending_log:
+        pending_log.status = 'rejected'
+        pending_log.approved_by = deleted_by
+        pending_log.approved_at = datetime.utcnow()
+
+    delete_feature_recursive(feature)
+    db.session.commit()
+    emit_data_change('features_changed', actor=deleted_by, scope='features', resource_id=id)
+    return jsonify(message='节点删除成功')
 
 def get_app_root(node):
     # 获取节点所属的应用根节点
@@ -1279,131 +1211,96 @@ def get_app_root_name(feature_id):
     return current.name if current else '未知应用'
 
 @app.route('/api/features/<int:id>/move', methods=['POST'])
+@auth_required
 def move_feature(id):
     feature = Feature.query.get(id)
     if not feature:
         return jsonify(message='节点不存在'), 404
-    
-    # 应用节点不支持移动
+
     if feature.node_type == 'app':
         return jsonify(message='应用节点不支持移动'), 400
-    
-    data = request.get_json()
+
+    data = request.get_json() or {}
+    ctx = get_auth_context()
+    user_role = ctx['role']
+    user_id = ctx['user_id']
+    updated_by = data.get('updated_by') or ctx['username']
     new_parent_id = data.get('new_parent_id')
-    updated_by = data.get('updated_by', 'system')
-    user_role = data.get('user_role', 'admin')
-    user_id = data.get('user_id', None)
-    
-    # 权限检查：开发只能移动被授权的应用的相关数据
+
+    if get_pending_audit(AuditLog, feature.id) and user_role != 'admin':
+        return jsonify(message='待审核的节点在未被审核前不允许移动'), 400
+
     if user_role != 'admin' and user_id:
-        # 获取用户授权的应用
         user_apps = UserApp.query.filter_by(user_id=user_id).all()
         authorized_app_ids = [ua.app_id for ua in user_apps]
-        
-        # 检查节点是否在授权的应用中
-        # 获取节点所属的应用
         app_root = get_app_root(feature)
         if app_root.id not in authorized_app_ids:
             return jsonify(message='您没有权限移动该节点'), 403
-    
-    # 检查新父节点是否存在
+
     if new_parent_id:
         new_parent = Feature.query.get(new_parent_id)
         if not new_parent:
             return jsonify(message='新父节点不存在'), 404
-        
-        # 检查新父节点是否为功能节点（功能节点不能有子节点）
         if new_parent.node_type == 'function':
             return jsonify(message='功能节点不能有子节点'), 400
-        
-        # 检查是否会形成循环引用
         current = new_parent
         while current:
             if current.id == id:
                 return jsonify(message='不能将节点移动到其自身的子树中'), 400
             current = current.parent
-        
-        # 检查分类节点和功能节点移动限制
-        if feature.node_type == 'category' or feature.node_type == 'function':
-            # 检查是否跨应用移动
+        if feature.node_type in ('category', 'function'):
             current_app = get_app_root(feature)
             new_app = get_app_root(new_parent)
             if current_app.id != new_app.id:
-                if feature.node_type == 'category':
-                    return jsonify(message='分类节点不能跨应用移动'), 400
-                else:
-                    return jsonify(message='功能节点不能跨应用移动'), 400
-    else:
-        # 分类节点不能移动到顶层
-        if feature.node_type == 'category':
-            return jsonify(message='分类节点不能移动到顶层'), 400
-    
-    # 检查移动后是否会导致同层级节点名称重复
-    existing_feature = Feature.query.filter_by(
-        parent_id=new_parent_id,
-        name=feature.name
-    ).filter(Feature.id != id).first()
-    
-    if existing_feature:
+                msg = '分类节点不能跨应用移动' if feature.node_type == 'category' else '功能节点不能跨应用移动'
+                return jsonify(message=msg), 400
+    elif feature.node_type == 'category':
+        return jsonify(message='分类节点不能移动到顶层'), 400
+
+    if Feature.query.filter_by(parent_id=new_parent_id, name=feature.name).filter(
+        Feature.id != id
+    ).first():
         return jsonify(message='目标层级已存在同名节点'), 400
-    
-    # 验证功能节点不能是根节点
+
     if feature.node_type == 'function' and new_parent_id is None:
         return jsonify(message='功能节点不能是根节点'), 400
-    
-    # 设置状态
-    status = 'approved' if user_role == 'admin' else 'pending'
-    feature.parent_id = new_parent_id
-    feature.status = status
-    feature.updated_by = updated_by
-    
-    # 非管理员移动的需要审核
+
+    old_parent_id = feature.parent_id
+    before_content = feature_snapshot(feature)
+
     if user_role != 'admin':
-        # 保存修改前的内容
-        before_content = {
-            'name': feature.name,
-            'description': feature.description,
-            'use_cases': feature.use_cases,
-            'videos': feature.videos,
-            'version_range': feature.version_range,
-            'parent_id': feature.parent_id,
-            'node_type': feature.node_type,
-            'is_guide_supported': feature.is_guide_supported,
-            'devices': feature.devices
-        }
-        
-        # 保存修改后的内容
-        after_content = {
-            'name': feature.name,
-            'description': feature.description,
-            'use_cases': feature.use_cases,
-            'videos': feature.videos,
-            'version_range': feature.version_range,
-            'parent_id': new_parent_id,
-            'node_type': feature.node_type,
-            'is_guide_supported': feature.is_guide_supported,
-            'devices': feature.devices
-        }
-        
-        # 删除该节点之前的未审核记录
+        after_content = feature_snapshot(feature)
+        after_content['parent_id'] = new_parent_id
         AuditLog.query.filter_by(feature_id=feature.id, status='pending').delete()
-        
-        audit_log = AuditLog(
+        feature.status = 'pending'
+        feature.updated_by = updated_by
+        db.session.add(AuditLog(
             feature_id=feature.id,
-            action='update',
+            action='move',
             status='pending',
-            created_by=updated_by or 'user',
-            before_content=str(before_content),
-            after_content=str(after_content)
-        )
-        db.session.add(audit_log)
-    
+            created_by=updated_by,
+            before_content=dump_audit_content(before_content),
+            after_content=dump_audit_content(after_content),
+        ))
+    else:
+        conflict = check_revision_conflict(feature, data)
+        if conflict:
+            return conflict
+        feature.parent_id = new_parent_id
+        feature.status = 'approved'
+        feature.updated_by = updated_by
+        bump_revision(feature)
+
     db.session.commit()
-    return jsonify(message='节点移动成功')
+    if user_role != 'admin':
+        emit_data_change('audit_submitted', actor=updated_by, scope='audit', resource_id=id)
+    emit_data_change('features_changed', actor=updated_by, scope='features', resource_id=id)
+    return jsonify(message='节点移动成功', revision=feature.revision)
 
 
 # 应用版本管理API
 @app.route('/api/app-versions/<int:app_id>', methods=['GET'])
+@auth_required
 def get_app_versions(app_id):
     # 检查应用是否存在
     app = Feature.query.get(app_id)
@@ -1420,23 +1317,17 @@ def get_app_versions(app_id):
 
 
 @app.route('/api/app-versions', methods=['POST'])
+@admin_required
 def add_app_version():
     data = request.get_json()
     app_id = data.get('app_id')
     version = data.get('version')
     changelog = data.get('changelog')
-    user_role = data.get('user_role', 'developer')
     
-    # 检查应用是否存在
     app = Feature.query.get(app_id)
     if not app or app.node_type != 'app':
         return jsonify(message='应用不存在'), 404
     
-    # 检查权限
-    if user_role != 'admin':
-        return jsonify(message='只有管理员可以添加版本'), 403
-    
-    # 检查版本是否已存在
     existing_version = AppVersion.query.filter_by(app_id=app_id, version=version).first()
     if existing_version:
         return jsonify(message='该版本已存在'), 400
@@ -1452,17 +1343,11 @@ def add_app_version():
 
 
 @app.route('/api/app-versions/<int:id>', methods=['DELETE'])
+@admin_required
 def delete_app_version(id):
     version = AppVersion.query.get(id)
     if not version:
         return jsonify(message='版本不存在'), 404
-    
-    data = request.get_json()
-    user_role = data.get('user_role', 'developer')
-    
-    # 检查权限
-    if user_role != 'admin':
-        return jsonify(message='只有管理员可以删除版本'), 403
     
     db.session.delete(version)
     db.session.commit()
@@ -1471,6 +1356,7 @@ def delete_app_version(id):
 
 # 设备管理API
 @app.route('/api/devices', methods=['GET'])
+@auth_required
 def get_devices():
     devices = Device.query.all()
     return jsonify([{
@@ -1486,15 +1372,10 @@ def get_devices():
 
 
 @app.route('/api/devices', methods=['POST'])
+@admin_required
 def create_device():
     data = request.get_json()
-    user_role = data.get('user_role', 'developer')
     
-    # 检查权限
-    if user_role != 'admin':
-        return jsonify(message='只有管理员可以添加设备'), 403
-    
-    # 检查设备型号是否已存在
     if Device.query.filter_by(device_model=data['device_model']).first():
         return jsonify(message='设备型号已存在'), 400
     
@@ -1516,19 +1397,14 @@ def create_device():
 
 
 @app.route('/api/devices/<int:id>', methods=['PUT'])
+@admin_required
 def update_device(id):
     device = Device.query.get(id)
     if not device:
         return jsonify(message='设备不存在'), 404
     
     data = request.get_json()
-    user_role = data.get('user_role', 'developer')
     
-    # 检查权限
-    if user_role != 'admin':
-        return jsonify(message='只有管理员可以修改设备'), 403
-    
-    # 检查设备型号是否已存在（排除当前设备）
     if 'device_model' in data and data['device_model'] != device.device_model:
         if Device.query.filter_by(device_model=data['device_model']).filter(Device.id != id).first():
             return jsonify(message='设备型号已存在'), 400
@@ -1551,23 +1427,18 @@ def update_device(id):
 
 
 @app.route('/api/devices/<int:id>', methods=['DELETE'])
+@admin_required
 def delete_device(id):
     device = Device.query.get(id)
     if not device:
         return jsonify(message='设备不存在'), 404
-    
-    data = request.get_json()
-    user_role = data.get('user_role', 'developer')
-    
-    # 检查权限
-    if user_role != 'admin':
-        return jsonify(message='只有管理员可以删除设备'), 403
     
     db.session.delete(device)
     db.session.commit()
     return jsonify(message='设备删除成功')
 
 @app.route('/api/statistics', methods=['GET'])
+@auth_required
 def get_statistics():
     # 获取所有功能节点
     features = Feature.query.all()
@@ -1657,6 +1528,25 @@ def get_statistics():
         'apps': app_stats_list
     })
 
+def get_db_file_path():
+    return os.path.join(app.instance_path, 'app_knowledge.db')
+
+
+def sqlite_backup_to_file(dest_path):
+    """使用 SQLite backup API 创建一致性快照。"""
+    src_path = get_db_file_path()
+    if not os.path.exists(src_path):
+        return False
+    src = sqlite3.connect(src_path)
+    dest = sqlite3.connect(dest_path)
+    try:
+        src.backup(dest)
+    finally:
+        dest.close()
+        src.close()
+    return True
+
+
 # 备份功能相关函数
 def backup_database():
     """备份数据库"""
@@ -1688,13 +1578,16 @@ def backup_database():
             # 备份数据库文件
             print(f"Instance path: {app.instance_path}")
             # 在 Flask 应用中，SQLite 数据库文件默认存储在 instance 目录中
-            db_path = os.path.join(app.instance_path, 'app_knowledge.db')
+            db_path = get_db_file_path()
             print(f"Trying to backup database from: {db_path}")
             if os.path.exists(db_path):
                 print(f"Database file exists, starting backup...")
                 print(f"Database file size: {os.path.getsize(db_path)} bytes")
-                shutil.copy2(db_path, backup_file)
-                print(f"Backup completed: {backup_file}")
+                if sqlite_backup_to_file(backup_file):
+                    print(f"Backup completed: {backup_file}")
+                else:
+                    shutil.copy2(db_path, backup_file)
+                    print(f"Fallback copy backup completed: {backup_file}")
                 print(f"Backup file size: {os.path.getsize(backup_file)} bytes")
                 
                 # 设置备份文件的修改时间为当前时间，确保排序正确
@@ -1794,14 +1687,8 @@ backup_thread.start()
 
 # 备份配置API接口
 @app.route('/api/backup/config', methods=['GET'])
+@admin_required
 def get_backup_config():
-    """获取备份配置"""
-    # 暂时移除 JWT 验证，以便更容易测试
-    # current_user = get_current_user()
-    # if current_user['role'] != 'admin':
-    #     return jsonify(message='没有权限访问'), 403
-    
-    # 直接从配置文件获取
     current_config = load_config()
     backup_config = current_config.get('backup', {})
     
@@ -1814,8 +1701,8 @@ def get_backup_config():
     }), 200
 
 @app.route('/api/features/<int:app_id>/export', methods=['POST'])
+@auth_required
 def export_features(app_id):
-    """导出应用下的所有已审核功能为 zip 压缩包"""
     import zipfile
     import io
     import json
@@ -2068,36 +1955,19 @@ def export_features(app_id):
 
 
 @app.route('/api/backup/config', methods=['PUT'])
+@admin_required
 def update_backup_config():
-    """更新备份配置"""
-    # 暂时移除 JWT 验证，以便更容易测试
-    # current_user = get_current_user()
-    # if current_user['role'] != 'admin':
-    #     return jsonify(message='没有权限访问'), 403
-    
-    # 不允许手动修改配置，只允许通过配置文件修改
     return jsonify(message='配置只能通过配置文件修改，服务启动前修改'), 403
 
 @app.route('/api/backup/trigger', methods=['POST'])
+@admin_required
 def trigger_backup():
-    """手动触发备份"""
-    # 暂时移除 JWT 验证，以便更容易测试
-    # current_user = get_current_user()
-    # if current_user['role'] != 'admin':
-    #     return jsonify(message='没有权限访问'), 403
-    
     backup_database()
     return jsonify(message='备份已触发'), 200
 
 @app.route('/api/backup/list', methods=['GET'])
+@admin_required
 def list_backups():
-    """列出所有备份"""
-    # 暂时移除 JWT 验证，以便更容易测试
-    # current_user = get_current_user()
-    # if current_user['role'] != 'admin':
-    #     return jsonify(message='没有权限访问'), 403
-    
-    # 直接从配置文件获取
     current_config = load_config()
     backup_config = current_config.get('backup', {})
     
@@ -2121,14 +1991,8 @@ def list_backups():
     return jsonify(backups), 200
 
 @app.route('/api/backup/delete/<filename>', methods=['DELETE'])
+@admin_required
 def delete_backup(filename):
-    """删除指定的备份"""
-    # 暂时移除 JWT 验证，以便更容易测试
-    # current_user = get_current_user()
-    # if current_user['role'] != 'admin':
-    #     return jsonify(message='没有权限访问'), 403
-    
-    # 直接从配置文件获取
     current_config = load_config()
     backup_config = current_config.get('backup', {})
     
@@ -2157,14 +2021,9 @@ def delete_backup(filename):
         return jsonify(message=f'删除备份失败: {str(e)}'), 500
 
 @app.route('/api/backup/restore/<filename>', methods=['POST'])
+@admin_required
 def restore_backup(filename):
-    """恢复指定的备份"""
-    # 暂时移除 JWT 验证，以便更容易测试
-    # current_user = get_current_user()
-    # if current_user['role'] != 'admin':
-    #     return jsonify(message='没有权限访问'), 403
-    
-    # 直接从配置文件获取
+    global maintenance_mode
     current_config = load_config()
     backup_config = current_config.get('backup', {})
     
@@ -2179,23 +2038,20 @@ def restore_backup(filename):
         return jsonify(message='无效的备份文件名'), 400
     
     try:
+        maintenance_mode = True
         print(f"Restoring backup: {filename}")
         
-        # 确定数据库文件路径
-        db_path = os.path.join(app.instance_path, 'app_knowledge.db')
+        db_path = get_db_file_path()
         print(f"Restoring to: {db_path}")
         
-        # 停止应用对数据库的访问
-        print("Stopping database access...")
+        db.session.remove()
+        db.engine.dispose()
         
-        # 复制备份文件到数据库位置
-        print(f"Copying backup file: {backup_path} to {db_path}")
         shutil.copy2(backup_path, db_path)
         print(f"Restore completed: {filename}")
         
-        # 设置正确的文件权限
         os.chmod(db_path, 0o644)
-        print("Set correct permissions on database file")
+        db.engine.dispose()
         
         return jsonify(message='备份恢复成功'), 200
     except Exception as e:
@@ -2203,17 +2059,15 @@ def restore_backup(filename):
         import traceback
         traceback.print_exc()
         return jsonify(message=f'恢复备份失败: {str(e)}'), 500
+    finally:
+        maintenance_mode = False
 
 @app.route('/api/backup/import', methods=['POST'])
+@admin_required
 def import_database():
-    """导入数据库"""
-    # 暂时移除 JWT 验证，以便更容易测试
-    # current_user = get_current_user()
-    # if current_user['role'] != 'admin':
-    #     return jsonify(message='没有权限访问'), 403
-    
+    global maintenance_mode
+    maintenance_mode = True
     try:
-        # 检查是否有文件上传
         if 'file' not in request.files:
             return jsonify(message='请选择要导入的数据库文件'), 400
         
@@ -2319,6 +2173,8 @@ def import_database():
                     created_by VARCHAR(50),
                     updated_by VARCHAR(50),
                     created_at DATETIME NOT NULL,
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    updated_at DATETIME,
                     PRIMARY KEY (id),
                     FOREIGN KEY(parent_id) REFERENCES feature (id)
                 )
@@ -2497,6 +2353,8 @@ def import_database():
         import traceback
         traceback.print_exc()
         return jsonify(message=f'导入数据库失败: {str(e)}'), 500
+    finally:
+        maintenance_mode = False
 
 
 # ============================================

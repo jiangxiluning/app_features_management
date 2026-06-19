@@ -6,6 +6,7 @@
         <div class="header-right">
           <el-switch
             v-model="guideOnly"
+            :before-change="beforeGuideOnlyChange"
             active-text="只显示支持引导的功能"
           ></el-switch>
           <el-button type="primary" @click="handleAddAppNode" v-if="isAdmin">添加应用节点</el-button>
@@ -39,6 +40,7 @@
             node-key="id"
             :props="treeProps"
             :default-expand-all="false"
+            :default-expanded-keys="expandedKeys"
             :expand-on-click-node="false"
             :auto-expand-parent="false"
             @node-click="handleNodeClick"
@@ -819,6 +821,9 @@ import api from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Minus } from '@element-plus/icons-vue'
 import { marked } from 'marked'
+import { onDataChangeRefresh } from '../utils/dataChangeBus'
+
+let unsubscribeDataChange = null
 
 const features = ref([])
 const featuresTree = ref([])
@@ -1024,25 +1029,144 @@ const isDragging = ref(false)
 // 展开的节点ID数组
 const expandedKeys = ref([])
 
-// 搜索时展开所有匹配的节点
-watch(searchQuery, (newVal) => {
-  if (newVal.trim()) {
-    nextTick(() => {
-      const keys = []
-      const collectKeys = (nodes) => {
-        nodes.forEach(node => {
-          keys.push(node.id)
-          if (node.children && node.children.length > 0) {
-            collectKeys(node.children)
-          }
-        })
-      }
-      collectKeys(filteredFeaturesTree.value)
-      expandedKeys.value = keys
-      if (featureTreeRef.value) {
-        featureTreeRef.value.setExpandedKeys(keys)
+// 收集树中所有节点的 ID
+const collectAllNodeIds = (nodes) => {
+  const ids = []
+  const traverse = (nodeList) => {
+    nodeList.forEach(node => {
+      ids.push(node.id)
+      if (node.children && node.children.length > 0) {
+        traverse(node.children)
       }
     })
+  }
+  traverse(nodes)
+  return ids
+}
+
+const collectDescendantIds = (nodes, rootId) => {
+  const findNode = (list, id) => {
+    for (const node of list) {
+      if (node.id === id) return node
+      if (node.children?.length) {
+        const found = findNode(node.children, id)
+        if (found) return found
+      }
+    }
+    return null
+  }
+  const root = findNode(nodes, rootId)
+  if (!root) return []
+  const ids = []
+  const traverse = (node) => {
+    if (node.children?.length) {
+      for (const child of node.children) {
+        ids.push(child.id)
+        traverse(child)
+      }
+    }
+  }
+  traverse(root)
+  return ids
+}
+
+let isSyncingExpand = false
+let guideOnlyExpandSnapshot = null
+
+const captureExpandedKeys = () => {
+  const keys = new Set(expandedKeys.value)
+  const walk = (nodes) => {
+    for (const data of nodes) {
+      const node = featureTreeRef.value?.getNode(data.id)
+      if (node?.expanded) keys.add(data.id)
+      if (data.children?.length) walk(data.children)
+    }
+  }
+  walk(featuresTree.value)
+  return [...keys]
+}
+
+// 恢复展开状态（仅 re-expand 快照中的节点，不主动收起其他节点）
+const restoreExpandedKeys = (snapshot, { removeIds = [] } = {}) => {
+  isSyncingExpand = true
+  const removeSet = new Set(removeIds)
+  nextTick(() => {
+    nextTick(() => {
+      const validIds = new Set(collectAllNodeIds(filteredFeaturesTree.value))
+      const keys = (snapshot || []).filter(id => !removeSet.has(id) && validIds.has(id))
+      expandedKeys.value = keys
+      const tree = featureTreeRef.value
+      if (tree) {
+        keys.forEach((key) => {
+          const node = tree.getNode(key)
+          if (node && !node.expanded) node.expand(null, true)
+        })
+      }
+      isSyncingExpand = false
+    })
+  })
+}
+
+// 本地树变更：变更前快照，变更后恢复
+const runTreeMutation = (mutator, { removeIds = [] } = {}) => {
+  const snapshot = captureExpandedKeys()
+  mutator()
+  restoreExpandedKeys(snapshot, { removeIds })
+}
+
+// 搜索专用：展开所有可见节点
+const expandAllVisibleNodes = (keys) => {
+  isSyncingExpand = true
+  expandedKeys.value = [...keys]
+  nextTick(() => {
+    nextTick(() => {
+      const tree = featureTreeRef.value
+      if (tree) {
+        const keySet = new Set(keys)
+        keys.forEach((key) => {
+          const node = tree.getNode(key)
+          if (node && !node.expanded) node.expand(null, true)
+        })
+        const walk = (nodeList) => {
+          for (const data of nodeList) {
+            const node = tree.getNode(data.id)
+            if (node?.expanded && !keySet.has(data.id)) node.collapse()
+            if (data.children?.length) walk(data.children)
+          }
+        }
+        walk(filteredFeaturesTree.value)
+      }
+      isSyncingExpand = false
+    })
+  })
+}
+
+const beforeGuideOnlyChange = () => {
+  guideOnlyExpandSnapshot = captureExpandedKeys()
+  return true
+}
+
+let expandedKeysBeforeSearch = null
+
+watch(searchQuery, (newVal, oldVal) => {
+  if (newVal.trim()) {
+    if (expandedKeysBeforeSearch === null) {
+      expandedKeysBeforeSearch = captureExpandedKeys()
+    }
+    nextTick(() => {
+      expandAllVisibleNodes(collectAllNodeIds(filteredFeaturesTree.value))
+    })
+  } else if (oldVal?.trim()) {
+    restoreExpandedKeys(expandedKeysBeforeSearch ?? [])
+    expandedKeysBeforeSearch = null
+  }
+})
+
+watch(guideOnly, () => {
+  if (guideOnlyExpandSnapshot !== null) {
+    const snapshot = guideOnlyExpandSnapshot
+    guideOnlyExpandSnapshot = null
+    restoreExpandedKeys(snapshot)
   }
 })
 
@@ -1170,7 +1294,8 @@ const moveConfirmData = reactive({
   targetId: '',
   targetName: '',
   dontRemindAgain: false,
-  moveType: ''
+  moveType: '',
+  revision: 1
 })
 // 本地存储，记录用户是否选择了不再提醒
 const getDontRemindAgain = () => {
@@ -1189,6 +1314,35 @@ const setDontRemindAgain = (value) => {
     console.error('Error setting localStorage:', error)
   }
 }
+
+const executeMove = async (sourceId, targetId, revision) => {
+  const expandedSnapshot = captureExpandedKeys()
+  await featureAPI.moveFeature(sourceId, targetId, {
+    updated_by: localStorage.getItem('username') || 'user',
+    revision: revision || 1
+  })
+  const userRole = localStorage.getItem('role') || 'developer'
+  if (userRole === 'admin') {
+    runTreeMutation(() => moveNodeInTree(featuresTree.value, sourceId, targetId))
+    ElMessage.success('节点移动成功')
+  } else {
+    ElMessage.success('移动已提交，等待审核')
+    await loadData({ expandedKeys: expandedSnapshot })
+  }
+}
+
+const handleMoveError = async (error) => {
+  if (error.response?.status === 409) {
+    ElMessage.warning(error.response.data.message || '数据已被他人修改，请刷新后重试')
+    await loadData({ expandedKeys: captureExpandedKeys() })
+    return
+  }
+  if (error.response?.status === 400) {
+    ElMessage.error('移动失败：' + (error.response.data.message || '目标层级已存在同名节点'))
+    return
+  }
+  ElMessage.error('移动失败：' + (error.response?.data?.message || '未知错误'))
+}
 const featureForm = reactive({
   id: '',
   name: '',
@@ -1198,7 +1352,8 @@ const featureForm = reactive({
   version_range: '>= 0.0.0.0',
   parent_id: null,
   node_type: 'function',
-  is_guide_supported: 'false'
+  is_guide_supported: 'false',
+  revision: 1
 })
 
 // 版本管理相关
@@ -1345,58 +1500,23 @@ const handleSelectAllDevices = (value) => {
   }
 }
 
-// 收集树中所有节点的 ID
-const collectAllNodeIds = (nodes) => {
-  const ids = []
-  const traverse = (nodeList) => {
-    nodeList.forEach(node => {
-      ids.push(node.id)
-      if (node.children && node.children.length > 0) {
-        traverse(node.children)
-      }
-    })
-  }
-  traverse(nodes)
-  return ids
-}
-
 // 加载数据
-const loadData = async () => {
+const loadData = async ({ expandedKeys: expandedKeysOverride, removeIds = [] } = {}) => {
   try {
-    const currentExpandedKeys = [...expandedKeys.value]
-    
-    let username = 'user'
-    let userRole = 'developer'
-    let user_id = '1'
-    try {
-      username = localStorage.getItem('username') || 'user'
-      userRole = localStorage.getItem('role') || 'developer'
-      user_id = localStorage.getItem('user_id') || '1'
-    } catch (error) {
-      console.error('Error getting localStorage:', error)
-    }
-    
-    const featuresResponse = await featureAPI.getFeatures(userRole, user_id)
+    const snapshot = expandedKeysOverride ?? captureExpandedKeys()
+    const includePending = localStorage.getItem('role') === 'admin'
+    const featuresResponse = await featureAPI.getFeatures(
+      includePending ? { include_pending: true } : {}
+    )
     const newFeaturesData = featuresResponse.data.data
-    
+
     featuresTree.value = newFeaturesData
-    
+
     await loadDevices()
-    
+
     await nextTick()
-    
-    const allNodeIds = collectAllNodeIds(newFeaturesData)
-    const validExpandedKeys = currentExpandedKeys.filter(id => allNodeIds.includes(id))
-    
-    expandedKeys.value = [...validExpandedKeys]
-    
-    await new Promise(resolve => setTimeout(resolve, 0))
-    
-    expandedKeys.value = [...validExpandedKeys]
-    
-    if (featureTreeRef.value && validExpandedKeys.length > 0) {
-      featureTreeRef.value.setExpandedKeys(validExpandedKeys)
-    }
+
+    restoreExpandedKeys(snapshot, { removeIds })
   } catch (error) {
     ElMessage.error('加载数据失败')
   }
@@ -1651,6 +1771,7 @@ const handleNodeClick = async (data) => {
 
 // 节点展开事件
 const handleNodeExpand = (node) => {
+  if (isSyncingExpand) return
   if (node && node.data && node.data.id) {
     if (!expandedKeys.value.includes(node.data.id)) {
       expandedKeys.value.push(node.data.id)
@@ -1660,6 +1781,7 @@ const handleNodeExpand = (node) => {
 
 // 节点折叠事件
 const handleNodeCollapse = (node) => {
+  if (isSyncingExpand) return
   if (node && node.data && node.data.id) {
     const index = expandedKeys.value.indexOf(node.data.id)
     if (index > -1) {
@@ -1801,14 +1923,17 @@ const handleMoveNode = async (nodeId, command) => {
       if (!currentNode) return
       
       if (getDontRemindAgain()) {
-        await featureAPI.moveFeature(nodeId, null)
-        moveNodeInTree(featuresTree.value, nodeId, null)
-        ElMessage.success('节点移动成功')
+        try {
+          await executeMove(nodeId, null, currentNode.revision)
+        } catch (error) {
+          await handleMoveError(error)
+        }
       } else {
         moveConfirmData.sourceId = nodeId
         moveConfirmData.sourceName = currentNode.name
         moveConfirmData.targetId = null
         moveConfirmData.targetName = '顶层'
+        moveConfirmData.revision = currentNode.revision || 1
         moveConfirmData.dontRemindAgain = false
         moveConfirmData.moveType = 'menu'
         moveConfirmVisible.value = true
@@ -1825,24 +1950,24 @@ const handleMoveNode = async (nodeId, command) => {
 
 // 确认移动节点
 const handleConfirmMove = async () => {
+  const findNode = (nodes, id) => {
+    for (const node of nodes) {
+      if (node.id === id) {
+        return node
+      }
+      if (node.children && node.children.length > 0) {
+        const found = findNode(node.children, id)
+        if (found) {
+          return found
+        }
+      }
+    }
+    return null
+  }
+
   try {
     let targetName = '顶层'
     if (moveForm.newParentId) {
-      const findNode = (nodes, id) => {
-        for (const node of nodes) {
-          if (node.id === id) {
-            return node
-          }
-          if (node.children && node.children.length > 0) {
-            const found = findNode(node.children, id)
-            if (found) {
-              return found
-            }
-          }
-        }
-        return null
-      }
-      
       const targetNode = findNode(featuresTree.value, moveForm.newParentId)
       if (targetNode) {
         targetName = targetNode.name
@@ -1850,15 +1975,20 @@ const handleConfirmMove = async () => {
     }
     
     if (getDontRemindAgain()) {
-      await featureAPI.moveFeature(moveForm.currentNodeId, moveForm.newParentId)
-      moveNodeInTree(featuresTree.value, moveForm.currentNodeId, moveForm.newParentId)
-      ElMessage.success('节点移动成功')
-      moveDialogVisible.value = false
+      const sourceNode = findNode(featuresTree.value, moveForm.currentNodeId)
+      try {
+        await executeMove(moveForm.currentNodeId, moveForm.newParentId, sourceNode?.revision)
+        moveDialogVisible.value = false
+      } catch (error) {
+        await handleMoveError(error)
+      }
     } else {
+      const sourceNode = findNode(featuresTree.value, moveForm.currentNodeId)
       moveConfirmData.sourceId = moveForm.currentNodeId
       moveConfirmData.sourceName = moveForm.currentNodeName
       moveConfirmData.targetId = moveForm.newParentId
       moveConfirmData.targetName = targetName
+      moveConfirmData.revision = sourceNode?.revision || 1
       moveConfirmData.dontRemindAgain = false
       moveConfirmData.moveType = 'menu'
       moveConfirmVisible.value = true
@@ -1977,20 +2107,10 @@ const handleAddVersion = async () => {
   await versionFormRef.value.validate(async (valid) => {
     if (valid) {
       try {
-        let username = 'user'
-        let userRole = 'developer'
-        try {
-          username = localStorage.getItem('username') || 'user'
-          userRole = localStorage.getItem('role') || 'developer'
-        } catch (error) {
-          console.error('Error getting localStorage:', error)
-        }
-        
         await versionAPI.addAppVersion({
           app_id: currentAppId.value,
           version: versionForm.version,
-          changelog: versionForm.changelog,
-          user_role: userRole
+          changelog: versionForm.changelog
         })
         ElMessage.success('版本添加成功')
         await loadAppVersions(currentAppId.value)
@@ -2017,16 +2137,7 @@ const handleDeleteVersion = async (versionId) => {
       type: 'warning'
     })
     
-    let userRole = 'developer'
-    try {
-      userRole = localStorage.getItem('role') || 'developer'
-    } catch (error) {
-      console.error('Error getting localStorage:', error)
-    }
-    
-    await versionAPI.deleteAppVersion(versionId, {
-      user_role: userRole
-    })
+    await versionAPI.deleteAppVersion(versionId, {})
     ElMessage.success('版本删除成功')
     await loadAppVersions(currentAppId.value)
   } catch (error) {
@@ -2171,31 +2282,10 @@ const handleMoveConfirmOk = async () => {
       setDontRemindAgain(true)
     }
     
-    let username = 'user'
-    let userRole = 'developer'
-    let user_id = '1'
-    try {
-      username = localStorage.getItem('username') || 'user'
-      userRole = localStorage.getItem('role') || 'developer'
-      user_id = localStorage.getItem('user_id') || '1'
-    } catch (error) {
-      console.error('Error getting localStorage:', error)
-    }
-    
-    await featureAPI.moveFeature(moveConfirmData.sourceId, moveConfirmData.targetId, {
-      updated_by: username,
-      user_role: userRole,
-      user_id: user_id
-    })
-    moveNodeInTree(featuresTree.value, moveConfirmData.sourceId, moveConfirmData.targetId)
-    ElMessage.success('节点移动成功')
+    await executeMove(moveConfirmData.sourceId, moveConfirmData.targetId, moveConfirmData.revision)
     moveConfirmVisible.value = false
   } catch (error) {
-    if (error.response && error.response.status === 400) {
-      ElMessage.error('移动失败：' + (error.response.data.message || '目标层级已存在同名节点'))
-    } else {
-      ElMessage.error('移动失败：' + (error.response?.data?.message || '未知错误'))
-    }
+    await handleMoveError(error)
     moveConfirmVisible.value = false
   }
 }
@@ -2220,14 +2310,17 @@ const handleNodeDrop = async (draggingNode, dropNode, dropType, ev) => {
     }
     
     if (getDontRemindAgain()) {
-      await featureAPI.moveFeature(draggingNode.data.id, newParentId)
-      moveNodeInTree(featuresTree.value, draggingNode.data.id, newParentId)
-      ElMessage.success('节点移动成功')
+      try {
+        await executeMove(draggingNode.data.id, newParentId, draggingNode.data.revision)
+      } catch (error) {
+        await handleMoveError(error)
+      }
     } else {
       moveConfirmData.sourceId = draggingNode.data.id
       moveConfirmData.sourceName = draggingNode.data.name
       moveConfirmData.targetId = newParentId
       moveConfirmData.targetName = targetName
+      moveConfirmData.revision = draggingNode.data.revision || 1
       moveConfirmData.dontRemindAgain = false
       moveConfirmData.moveType = 'drag'
       moveConfirmVisible.value = true
@@ -2382,6 +2475,8 @@ const handleEditFeature = (row) => {
     }
   }
   
+  featureForm.revision = row.revision || 1
+  
   // 初始化动态字段
   initDynamicFields()
   
@@ -2421,16 +2516,8 @@ const handleCopyFeature = (row) => {
 const handleSaveFeature = async () => {
   if (!featureFormRef.value) return
   
-  let username = 'user'
-  let userRole = 'developer'
-  let user_id = '1'
-  try {
-    username = localStorage.getItem('username') || 'user'
-    userRole = localStorage.getItem('role') || 'developer'
-    user_id = localStorage.getItem('user_id') || '1'
-  } catch (error) {
-    console.error('Error getting localStorage:', error)
-  }
+  const username = localStorage.getItem('username') || 'user'
+  const userRole = localStorage.getItem('role') || 'developer'
   
   if (featureForm.node_type === 'function') {
     featureForm.use_cases = useCasesList.value
@@ -2450,54 +2537,71 @@ const handleSaveFeature = async () => {
   
   await featureFormRef.value.validate(async (valid) => {
     if (valid) {
+      const expandedSnapshot = captureExpandedKeys()
       try {
         if (featureForm.id) {
-          await featureAPI.updateFeature(featureForm.id, {
+          const response = await featureAPI.updateFeature(featureForm.id, {
             ...featureForm,
             updated_by: username,
-            user_role: userRole,
-            user_id: user_id
+            revision: featureForm.revision
           })
-          updateNodeInTree(featuresTree.value, featureForm.id, {
-            name: featureForm.name,
-            description: featureForm.description,
-            node_type: featureForm.node_type,
-            version_range: featureForm.version_range,
-            is_guide_supported: featureForm.is_guide_supported,
-            use_cases: featureForm.use_cases,
-            videos: featureForm.videos,
-            devices: featureForm.devices,
-            status: featureForm.status
-          })
-          ElMessage.success(`${getNodeTypeLabel(featureForm.node_type)}节点更新成功`)
+          if (userRole === 'admin') {
+            runTreeMutation(() => {
+              updateNodeInTree(featuresTree.value, featureForm.id, {
+                name: featureForm.name,
+                description: featureForm.description,
+                node_type: featureForm.node_type,
+                version_range: featureForm.version_range,
+                is_guide_supported: featureForm.is_guide_supported,
+                use_cases: featureForm.use_cases,
+                videos: featureForm.videos,
+                devices: featureForm.devices,
+                status: 'approved',
+                revision: response.data.revision
+              })
+            })
+            ElMessage.success(`${getNodeTypeLabel(featureForm.node_type)}节点更新成功`)
+          } else {
+            ElMessage.success('修改已提交，等待审核')
+            await loadData({ expandedKeys: expandedSnapshot })
+          }
         } else {
           const response = await featureAPI.createFeature({
             ...featureForm,
-            created_by: username,
-            user_role: userRole,
-            user_id: user_id
+            created_by: username
           })
-          const newNode = {
-            id: response.data.id,
-            name: featureForm.name,
-            description: featureForm.description,
-            node_type: featureForm.node_type,
-            parent_id: featureForm.parent_id,
-            version_range: featureForm.version_range || 'All',
-            is_guide_supported: featureForm.is_guide_supported,
-            use_cases: featureForm.use_cases || '',
-            videos: featureForm.videos || '',
-            devices: featureForm.devices || '',
-            status: userRole === 'admin' ? 'approved' : 'pending',
-            children: []
+          if (userRole === 'admin') {
+            const newNode = {
+              id: response.data.id,
+              name: featureForm.name,
+              description: featureForm.description,
+              node_type: featureForm.node_type,
+              parent_id: featureForm.parent_id,
+              version_range: featureForm.version_range || 'All',
+              is_guide_supported: featureForm.is_guide_supported,
+              use_cases: featureForm.use_cases || '',
+              videos: featureForm.videos || '',
+              devices: featureForm.devices || '',
+              status: 'approved',
+              revision: response.data.revision || 1,
+              children: []
+            }
+            runTreeMutation(() => {
+              addNodeToTree(featuresTree.value, featureForm.parent_id, newNode)
+            })
+            ElMessage.success(`${getNodeTypeLabel(featureForm.node_type)}节点添加成功`)
+          } else {
+            ElMessage.success('创建已提交，等待审核')
+            await loadData({ expandedKeys: expandedSnapshot })
           }
-          addNodeToTree(featuresTree.value, featureForm.parent_id, newNode)
-          ElMessage.success(`${getNodeTypeLabel(featureForm.node_type)}节点添加成功`)
         }
         dialogVisible.value = false
         selectedFeature.value = null
       } catch (error) {
-        if (error.response && error.response.status === 400) {
+        if (error.response?.status === 409) {
+          ElMessage.warning(error.response.data.message || '数据已被他人修改，请刷新后重试')
+          await loadData({ expandedKeys: expandedSnapshot })
+        } else if (error.response?.status === 400) {
           ElMessage.error(error.response.data.message || '操作失败：同层级已存在同名节点')
         } else {
           ElMessage.error('操作失败，请重试')
@@ -2516,13 +2620,14 @@ const handleApproveFeature = async (id) => {
     } catch (error) {
       console.error('Error getting localStorage:', error)
     }
-    
+
+    const expandedSnapshot = captureExpandedKeys()
     await featureAPI.approveFeature(id, {
       approved_by: username
     })
-    updateNodeInTree(featuresTree.value, id, { status: 'approved' })
+    await loadData({ expandedKeys: expandedSnapshot })
     ElMessage.success('节点审核通过成功')
-    
+
     selectedFeature.value = null
   } catch (error) {
     if (error.response && error.response.status === 400 && error.response.data.message === '该审核已失效') {
@@ -2542,11 +2647,12 @@ const handleWithdrawAudit = async (id) => {
     } catch (error) {
       console.error('Error getting localStorage:', error)
     }
-    
+
+    const expandedSnapshot = captureExpandedKeys()
     await featureAPI.withdrawAudit(id, {
       withdrawn_by: username
     })
-    updateNodeInTree(featuresTree.value, id, { status: 'pending' })
+    await loadData({ expandedKeys: expandedSnapshot })
     ElMessage.success('审核撤回成功')
     selectedFeature.value = null
   } catch (error) {
@@ -2562,25 +2668,20 @@ const handleDeleteFeature = async (id) => {
       cancelButtonText: '取消',
       type: 'warning'
     })
-    
-    let username = 'user'
-    let userRole = 'developer'
-    let user_id = '1'
-    try {
-      username = localStorage.getItem('username') || 'user'
-      userRole = localStorage.getItem('role') || 'developer'
-      user_id = localStorage.getItem('user_id') || '1'
-    } catch (error) {
-      console.error('Error getting localStorage:', error)
-    }
-    
+
+    const expandedSnapshot = captureExpandedKeys()
     await featureAPI.deleteFeature(id, {
-      deleted_by: username,
-      user_role: userRole,
-      user_id: user_id
+      deleted_by: localStorage.getItem('username') || 'user'
     })
-    removeNodeFromTree(featuresTree.value, id)
-    ElMessage.success('节点删除成功')
+    const userRole = localStorage.getItem('role') || 'developer'
+    if (userRole === 'admin') {
+      const removeIds = [id, ...collectDescendantIds(featuresTree.value, id)]
+      runTreeMutation(() => removeNodeFromTree(featuresTree.value, id), { removeIds })
+      ElMessage.success('节点删除成功')
+    } else {
+      ElMessage.success('删除已提交，等待审核')
+      await loadData({ expandedKeys: expandedSnapshot })
+    }
     selectedFeature.value = null
   } catch (error) {
     if (error !== 'cancel') {
@@ -3101,12 +3202,18 @@ const downloadFile = (content, filename, mimeType) => {
 onMounted(() => {
   loadData()
   loadDevices()
+  unsubscribeDataChange = onDataChangeRefresh((event) => {
+    if (event.scope === 'features') {
+      loadData({ expandedKeys: captureExpandedKeys() })
+    }
+  })
   // 添加点击外部关闭右键菜单的事件监听器
   document.addEventListener('click', handleClickOutside)
   document.addEventListener('contextmenu', handleClickOutside)
 })
 
 onUnmounted(() => {
+  if (unsubscribeDataChange) unsubscribeDataChange()
   // 移除事件监听器
   document.removeEventListener('click', handleClickOutside)
   document.removeEventListener('contextmenu', handleClickOutside)

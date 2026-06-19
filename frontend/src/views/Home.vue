@@ -99,6 +99,9 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { authAPI } from '../api'
+import { useDataChangeSSE, disconnectDataChangeSSE } from '../composables/useDataChangeSSE'
+
+useDataChangeSSE()
 
 const router = useRouter()
 const route = useRoute()
@@ -145,6 +148,7 @@ const handleMenuSelect = (key, keyPath) => {
 }
 
 const handleLogout = () => {
+  disconnectDataChangeSSE()
   localStorage.removeItem('token')
   localStorage.removeItem('role')
   localStorage.removeItem('username')

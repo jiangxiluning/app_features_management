@@ -179,7 +179,7 @@ const loadStatistics = async () => {
       console.error('Error getting localStorage:', error)
     }
     
-    const featuresResponse = await featureAPI.getFeatures(userRole, user_id, { page: 1, page_size: 100 })
+    const featuresResponse = await featureAPI.getFeatures({ page: 1, page_size: 100 })
     const features = featuresResponse.data.data
     
     // 递归获取所有功能节点

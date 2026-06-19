@@ -52,6 +52,7 @@
           @change="handleDateFilter"
         />
         <el-button type="primary" @click="resetFilter">重置</el-button>
+        <el-button @click="getAuditLogs">刷新</el-button>
       </div>
     </div>
     
@@ -232,11 +233,14 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, h } from 'vue'
+import { ref, onMounted, onUnmounted, computed, h } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowRight } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import api from '../api'
+import { onDataChangeRefresh } from '../utils/dataChangeBus'
+
+let unsubscribeDataChange = null
 
 // 渲染功能详情组件
 const RenderFeatureDetails = {
@@ -471,7 +475,8 @@ const getActionText = (action) => {
   const actionMap = {
     'create': '新增',
     'update': '修改',
-    'delete': '删除'
+    'delete': '删除',
+    'move': '移动'
   }
   return actionMap[action] || action
 }
@@ -544,6 +549,15 @@ const rejectAudit = async (id) => {
 
 onMounted(() => {
   getAuditLogs()
+  unsubscribeDataChange = onDataChangeRefresh((event) => {
+    if (event.scope === 'audit') {
+      getAuditLogs()
+    }
+  })
+})
+
+onUnmounted(() => {
+  if (unsubscribeDataChange) unsubscribeDataChange()
 })
 </script>
 

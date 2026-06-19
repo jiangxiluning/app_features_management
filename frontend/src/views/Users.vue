@@ -107,7 +107,7 @@ const getApps = async () => {
       console.error('Error getting localStorage:', error)
     }
     
-    const response = await featureAPI.getFeatures(userRole, user_id, { page: 1, page_size: 100 })
+    const response = await featureAPI.getFeatures({ page: 1, page_size: 100 })
     const data = response.data.data
     apps.value = data.filter(item => item.node_type === 'app')
   } catch (error) {
@@ -144,8 +144,7 @@ const saveUser = async () => {
         username: editForm.value.username,
         password: hashedPassword.password,
         salt: hashedPassword.salt,
-        role: editForm.value.role,
-        user_role: 'admin' // 管理员操作
+        role: editForm.value.role
       })
       ElMessage.success('用户添加成功')
       getUsers()

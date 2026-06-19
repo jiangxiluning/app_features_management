@@ -67,6 +67,15 @@ api.interceptors.response.use(response => {
   return response
 }, error => {
   console.error('响应错误:', error.config?.url, error.message, error.response?.data)
+  if (error.response?.status === 401) {
+    localStorage.removeItem('token')
+    localStorage.removeItem('role')
+    localStorage.removeItem('username')
+    localStorage.removeItem('user_id')
+    if (!window.location.pathname.includes('/login')) {
+      window.location.href = '/login'
+    }
+  }
   return Promise.reject(error)
 })
 
@@ -101,17 +110,11 @@ export const authAPI = {
 
 // 功能相关
 export const featureAPI = {
-  getFeatures: (userRole, userId, options = {}) => api.get('/features', {
-    params: {
-      user_role: userRole,
-      user_id: userId,
-      ...options
-    }
-  }),
+  getFeatures: (options = {}) => api.get('/features', { params: options }),
   createFeature: (data) => api.post('/features', data),
   updateFeature: (id, data) => api.put(`/features/${id}`, data),
   deleteFeature: (id, data) => api.delete(`/features/${id}`, { data }),
-  moveFeature: (id, newParentId, data) => api.post(`/features/${id}/move`, { 
+  moveFeature: (id, newParentId, data) => api.post(`/features/${id}/move`, {
     new_parent_id: newParentId,
     ...data
   }),
