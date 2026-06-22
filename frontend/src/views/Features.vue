@@ -33,6 +33,23 @@
               </template>
             </el-input>
           </div>
+          <div v-if="canExport" class="export-toolbar">
+            <div class="export-toolbar-info">
+              <span v-if="selectedExportCount > 0" class="export-toolbar-count">
+                已选 {{ selectedExportCount }} 个功能
+                <el-button link type="primary" size="small" @click="clearExportSelection">清空</el-button>
+              </span>
+              <span v-else class="export-toolbar-hint">勾选功能节点后可批量导出</span>
+            </div>
+            <div class="export-toolbar-actions">
+              <el-button size="small" :disabled="selectedExportCount === 0" @click="handleToolbarExport">
+                导出知识描述
+              </el-button>
+              <el-button size="small" :disabled="selectedExportCount === 0" @click="handleToolbarExportJson">
+                导出功能属性
+              </el-button>
+            </div>
+          </div>
           <h3>功能树</h3>
           <el-tree
             ref="featureTreeRef"
@@ -54,7 +71,18 @@
             class="feature-tree"
           >
             <template #default="{ node, data }">
-              <span class="tree-node" :data-node-type="data.node_type">
+              <span
+                class="tree-node"
+                :class="{ 'tree-node--export-selected': isExportSelected(data.id) }"
+                :data-node-type="data.node_type"
+              >
+                <el-checkbox
+                  v-if="canExport && isExportSelectable(data)"
+                  :model-value="isExportSelected(data.id)"
+                  class="export-node-checkbox"
+                  @click.stop
+                  @change="(checked) => setExportSelection(data, checked)"
+                />
                 <span class="node-emoji">{{ data.node_type === 'app' ? '💻' : data.node_type === 'category' ? '📁' : '🛠️' }}</span>
                 <span>{{ data.name }}</span>
                 <span class="node-status status-{{ data.status }}">{{ data.status === 'pending' ? ' ❓' : '' }}</span>
@@ -297,6 +325,10 @@
       <div class="context-menu-item" @click="handleContextMenuCommand('edit')" v-if="currentContextNode?.node_type !== 'app'">编辑</div>
       <div class="context-menu-item" @click="handleContextMenuCommand('editAppDescription')" v-if="currentContextNode?.node_type === 'app'">修改应用描述</div>
       <div class="context-menu-item" @click="handleContextMenuCommand('copy')" v-if="currentContextNode?.node_type === 'function'">复制</div>
+      <div class="context-menu-divider" v-if="currentContextNode?.node_type === 'function' && canExport && currentContextNode?.status === 'approved'"></div>
+      <div class="context-menu-item-header" v-if="currentContextNode?.node_type === 'function' && canExport && currentContextNode?.status === 'approved'">导出</div>
+      <div class="context-menu-item" @click="handleContextMenuCommand('exportFunction')" v-if="currentContextNode?.node_type === 'function' && canExport && currentContextNode?.status === 'approved'">导出知识描述文件</div>
+      <div class="context-menu-item" @click="handleContextMenuCommand('exportFunctionJson')" v-if="currentContextNode?.node_type === 'function' && canExport && currentContextNode?.status === 'approved'">导出功能属性文件</div>
       <div class="context-menu-item" @click="handleContextMenuCommand('delete')">删除</div>
       <div class="context-menu-divider" v-if="currentContextNode?.node_type !== 'app'"></div>
       <div class="context-menu-item-header" v-if="currentContextNode?.node_type !== 'app'">移动</div>
@@ -1195,6 +1227,8 @@ const currentContextNode = ref(null)
 
 // 导出相关
 const exportDialogVisible = ref(false)
+const exportContextApp = ref(null)
+const selectedExportFunctionIds = ref([])
 const showTemplateHelp = ref(false)
 const exportableFeatures = ref([])
 const selectedFeaturesForExport = ref([])
@@ -1836,6 +1870,68 @@ const getAppRoot = (nodeId) => {
   return current
 }
 
+const isExportSelectable = (node) =>
+  node?.node_type === 'function' && node.status === 'approved'
+
+const isExportSelected = (id) => selectedExportFunctionIds.value.includes(id)
+
+const selectedExportCount = computed(() => selectedExportFunctionIds.value.length)
+
+const selectedExportApp = computed(() => {
+  if (!selectedExportFunctionIds.value.length) return null
+  return getAppRoot(selectedExportFunctionIds.value[0])
+})
+
+const collectVisibleExportSelectableIds = (nodes) => {
+  const ids = new Set()
+  const walk = (list) => {
+    for (const node of list) {
+      if (isExportSelectable(node)) ids.add(node.id)
+      if (node.children?.length) walk(node.children)
+    }
+  }
+  walk(nodes)
+  return ids
+}
+
+const pruneExportSelection = () => {
+  const validIds = collectVisibleExportSelectableIds(filteredFeaturesTree.value)
+  selectedExportFunctionIds.value = selectedExportFunctionIds.value.filter(id => validIds.has(id))
+}
+
+watch(filteredFeaturesTree, () => pruneExportSelection(), { deep: true })
+
+const setExportSelection = (node, selected) => {
+  if (!isExportSelectable(node)) return
+  const id = node.id
+  const isSelected = selectedExportFunctionIds.value.includes(id)
+  if (selected && !isSelected) {
+    if (selectedExportFunctionIds.value.length > 0) {
+      const existingApp = getAppRoot(selectedExportFunctionIds.value[0])
+      const newApp = getAppRoot(id)
+      if (existingApp?.id !== newApp?.id) {
+        ElMessage.warning('请选择同一应用下的功能')
+        return
+      }
+    }
+    selectedExportFunctionIds.value = [...selectedExportFunctionIds.value, id]
+  } else if (!selected && isSelected) {
+    selectedExportFunctionIds.value = selectedExportFunctionIds.value.filter(x => x !== id)
+  }
+}
+
+const clearExportSelection = () => {
+  selectedExportFunctionIds.value = []
+}
+
+const resolveFunctionExportIds = (node) => {
+  const ids = selectedExportFunctionIds.value
+  if (ids.length > 1 && ids.includes(node.id)) {
+    return [...ids]
+  }
+  return [node.id]
+}
+
 // 获取可用的父节点列表
 const getAvailableParentNodes = (currentNodeId) => {
   const allNodes = []
@@ -2073,6 +2169,18 @@ const handleContextMenuCommand = (command) => {
     case 'exportJson':
       handleExportJson(currentContextNode.value)
       break
+    case 'exportFunction': {
+      const fnNode = currentContextNode.value
+      const app = getAppRoot(fnNode.id)
+      if (app) handleExport(app, resolveFunctionExportIds(fnNode))
+      break
+    }
+    case 'exportFunctionJson': {
+      const fnNode = currentContextNode.value
+      const app = getAppRoot(fnNode.id)
+      if (app) handleExportJson(app, resolveFunctionExportIds(fnNode))
+      break
+    }
     default:
       break
   }
@@ -2820,24 +2928,44 @@ const collectExportableFeatures = (node) => {
 }
 
 // 处理导出
-const handleExport = (node) => {
-  console.log('Export function called with node:', node)
-  console.log('Node type:', node?.node_type)
-  if (node && node.node_type !== 'app') {
-    console.log('Node is not an app, returning')
+const handleExport = (appNode, preselectedIds = null) => {
+  if (!appNode || appNode.node_type !== 'app') return
+  exportableFeatures.value = collectExportableFeatures(appNode)
+  if (exportableFeatures.value.length === 0) {
+    ElMessage.warning('没有可导出的功能')
     return
   }
-  // 收集可导出的功能
-  exportableFeatures.value = collectExportableFeatures(node)
-  // 默认全选所有功能
-  selectedFeaturesForExport.value = exportableFeatures.value.map(f => f.id)
-  console.log('Setting exportDialogVisible.value to true')
+  const validIds = new Set(exportableFeatures.value.map(f => f.id))
+  if (preselectedIds) {
+    selectedFeaturesForExport.value = preselectedIds.filter(id => validIds.has(id))
+    if (selectedFeaturesForExport.value.length === 0) {
+      ElMessage.warning('没有可导出的功能')
+      return
+    }
+  } else {
+    selectedFeaturesForExport.value = exportableFeatures.value.map(f => f.id)
+  }
+  exportContextApp.value = appNode
+  exportSearchQuery.value = ''
   exportDialogVisible.value = true
-  console.log('exportDialogVisible.value:', exportDialogVisible.value)
-  // 强制更新UI
-  setTimeout(() => {
-    console.log('After timeout, exportDialogVisible.value:', exportDialogVisible.value)
-  }, 100)
+}
+
+const handleToolbarExport = () => {
+  const app = selectedExportApp.value
+  if (!app || selectedExportFunctionIds.value.length === 0) {
+    ElMessage.warning('请先勾选要导出的功能')
+    return
+  }
+  handleExport(app, [...selectedExportFunctionIds.value])
+}
+
+const handleToolbarExportJson = () => {
+  const app = selectedExportApp.value
+  if (!app || selectedExportFunctionIds.value.length === 0) {
+    ElMessage.warning('请先勾选要导出的功能')
+    return
+  }
+  handleExportJson(app, [...selectedExportFunctionIds.value])
 }
 
 // 计算是否全选
@@ -2857,18 +2985,17 @@ const toggleSelectAll = () => {
 
 // 确认导出
 const confirmExport = async () => {
-  if (!currentContextNode.value || currentContextNode.value.node_type !== 'app') return
-  
+  if (!exportContextApp.value) return
+
   if (selectedFeaturesForExport.value.length === 0) {
     ElMessage.warning('请至少选择一个功能进行导出')
     return
   }
-  
+
   isExporting.value = true
   try {
-    // 获取应用ID
-    const appId = currentContextNode.value.id
-    const appName = currentContextNode.value.name || 'app'
+    const appId = exportContextApp.value.id
+    const appName = exportContextApp.value.name || 'app'
     
     // 调用后端API导出zip文件，传递模板内容和选中的功能ID
     const response = await api.post(`/features/${appId}/export`, {
@@ -2900,19 +3027,18 @@ const confirmExport = async () => {
 }
 
 // 导出JSON
-const handleExportJson = async (node) => {
-  if (!node || node.node_type !== 'app') return
-  
+const handleExportJson = async (appNode, featureIds = null) => {
+  if (!appNode || appNode.node_type !== 'app') return
+
   try {
-    const appId = node.id
-    const appName = node.name || 'app'
+    const appId = appNode.id
+    const appName = appNode.name || 'app'
     
     // 构建功能列表
     const functionsList = []
-    
-    // 重新处理，从children开始遍历
-    const appNode = findAppNode(featuresTree.value, appId)
-    if (appNode && appNode.children) {
+
+    const treeAppNode = findAppNode(featuresTree.value, appId)
+    if (treeAppNode && treeAppNode.children) {
       const processChildren = (children, parentPath = '') => {
         for (const child of children) {
           if (child.node_type === 'category') {
@@ -2991,14 +3117,25 @@ const handleExportJson = async (node) => {
           }
         }
       }
-      processChildren(appNode.children)
+      processChildren(treeAppNode.children)
     }
-    
-    // 生成JSON字符串
-    const jsonContent = JSON.stringify(functionsList, null, 2)
-    
-    // 下载文件
-    downloadFile(jsonContent, `${appName}_功能导出.json`, 'application/json')
+
+    let result = functionsList
+    if (featureIds && featureIds.length > 0) {
+      const idSet = new Set(featureIds.map(id => Number(id)))
+      result = functionsList.filter(f => idSet.has(Number(f.id)))
+      if (result.length === 0) {
+        ElMessage.warning('没有可导出的功能')
+        return
+      }
+    }
+
+    const jsonContent = JSON.stringify(result, null, 2)
+    const fileName = featureIds && featureIds.length > 0
+      ? `${appName}_功能导出_选中${result.length}项.json`
+      : `${appName}_功能导出.json`
+
+    downloadFile(jsonContent, fileName, 'application/json')
     
     ElMessage.success('成功导出功能为JSON文件')
   } catch (error) {
@@ -3433,6 +3570,45 @@ const handleClose = (done) => {
 .tree-node {
   display: flex;
   align-items: center;
+  border-radius: 4px;
+  padding: 0 4px;
+  margin: 0 -4px;
+}
+
+.tree-node--export-selected {
+  background: var(--el-color-primary-light-9);
+}
+
+.export-node-checkbox {
+  margin-right: 4px;
+  height: auto;
+}
+
+.export-toolbar {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 4px;
+  border: 1px solid var(--el-border-color-lighter);
+}
+
+.export-toolbar-info {
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.export-toolbar-hint {
+  color: var(--el-text-color-secondary);
+}
+
+.export-toolbar-count {
+  color: var(--el-text-color-primary);
+}
+
+.export-toolbar-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .tree-node .node-emoji {

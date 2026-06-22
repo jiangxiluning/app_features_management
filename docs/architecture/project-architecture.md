@@ -74,7 +74,7 @@ flowchart TB
 | API | `frontend/src/api/index.js` | Axios 封装、Token 注入、401 跳转 |
 | SSE | `frontend/src/composables/useDataChangeSSE.js` | EventSource 连接、变更通知 |
 | 事件总线 | `frontend/src/utils/dataChangeBus.js` | 页面内「立即刷新」联动 |
-| 功能树 | `frontend/src/views/Features.vue` | 核心业务 UI |
+| 功能树 | `frontend/src/views/Features.vue` | 核心业务 UI；树形编辑、审核、**多选导出** |
 
 ---
 
@@ -187,6 +187,44 @@ sequenceDiagram
     B->>API: revision=3（过期）
     API-->>B: 409 数据已被他人修改
 ```
+
+### 3.7 功能导出（0.9.1）
+
+支持两种导出入口：**应用级全量**（应用节点右键）与**树内多选**（勾选功能 + 工具栏 / 功能节点右键）。
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant FE as Features.vue
+    participant API as POST /features/:app_id/export
+
+    Note over U,FE: 路径 A：树内多选
+    U->>FE: 勾选已审核功能节点
+    U->>FE: 点击「导出知识描述」
+    FE->>FE: 打开弹窗，预选 feature_ids
+    U->>FE: 确认导出
+    FE->>API: { template, feature_ids: [1,3] }
+    API-->>FE: ZIP（仅选中功能 .md）
+
+    Note over U,FE: 路径 B：功能属性 JSON（纯前端）
+    U->>FE: 勾选功能 →「导出功能属性」
+    FE->>FE: 遍历树构建 JSON，按 ID 过滤
+    FE->>U: 下载 .json
+
+    Note over U,FE: 路径 C：应用级全量（不变）
+    U->>FE: 应用节点右键 → 导出
+    FE->>API: { template } 或前端全量 JSON
+```
+
+**导出权限：** `admin` 与 `developer`（`canExport`）。
+
+**前端选中态约束：**
+
+- 仅 `node_type=function` 且 `status=approved` 可勾选
+- 多选须属于同一应用
+- 搜索 / 引导过滤变化时自动 prune 无效选中 ID
+
+**后端：** Markdown ZIP 由 `export_features` 生成；JSON 属性文件在前端本地组装，不经 API。
 
 ---
 

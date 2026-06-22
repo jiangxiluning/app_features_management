@@ -1732,7 +1732,15 @@ def export_features(app_id):
         return approved_features
     
     approved_features = get_approved_features_under_app(app_feature)
-    
+
+    feature_ids = data.get('feature_ids')
+    if feature_ids:
+        try:
+            selected_ids = {int(fid) for fid in feature_ids}
+        except (TypeError, ValueError):
+            return jsonify(message='feature_ids 格式无效'), 400
+        approved_features = [f for f in approved_features if f.id in selected_ids]
+
     if not approved_features:
         return jsonify(message='该应用下没有已审核的功能节点可导出'), 400
     

@@ -285,7 +285,73 @@ revision 不匹配 → **409**。
 
 ### POST `/api/features/:app_id/export`
 
-登录用户。导出应用下已审核功能节点为 ZIP。
+登录用户（`admin` / `developer`）。导出应用下**已审核**功能节点为 Markdown ZIP。
+
+**Body：**
+
+```json
+{
+  "template": "# {{name}}\n\n{{description}}",
+  "feature_ids": [1, 3, 5]
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `template` | string | 否 | Markdown 模板；省略时使用默认模板 |
+| `feature_ids` | int[] | 否 | 要导出的功能 ID；省略时导出该应用下全部已审核功能 |
+
+**模板占位符（常用）：**
+
+| 占位符 | 含义 |
+|--------|------|
+| `{{name}}` | 功能名称 |
+| `{{description}}` | 功能描述 |
+| `{{version_range}}` | 版本范围 |
+| `{{is_guide_supported}}` | 是否支持引导 |
+| `{{#use_cases}}...{{/use_cases}}` | 典型使用案例列表 |
+| `{{#videos}}...{{/videos}}` | 教学视频列表 |
+| `{{#devices}}...{{/devices}}` | 不支持设备列表 |
+
+**响应 200：** `application/zip` 附件，文件名 `{应用名}_导出.zip`。
+
+**错误：**
+
+| 状态码 | 场景 |
+|--------|------|
+| 400 | 无已审核功能可导出；`feature_ids` 格式无效；过滤后无匹配功能 |
+| 404 | 应用不存在 |
+
+**前端调用场景（0.9.1）：**
+
+| 入口 | 传参 |
+|------|------|
+| 应用右键「导出知识描述」 | 省略 `feature_ids`（全量） |
+| 树多选 / 功能右键 | 传 `feature_ids` 为选中 ID 列表 |
+
+### 功能属性 JSON 导出（纯前端）
+
+「导出功能属性文件」**不调用后端 API**。前端 [`Features.vue`](../../frontend/src/views/Features.vue) 从功能树组装 JSON 数组并触发浏览器下载。
+
+导出字段示例：
+
+```json
+[
+  {
+    "id": 6,
+    "name": "功能名",
+    "version_range": ">= 1.0.0.0",
+    "is_guide_supported": true,
+    "unsupported_devices": ["iPhone15,1"],
+    "created_at": "2026-06-19 10:00:00"
+  }
+]
+```
+
+| 入口 | 范围 |
+|------|------|
+| 应用右键 | 应用下全部 function 节点 |
+| 树多选 / 功能右键 | 仅选中 ID 对应节点 |
 
 ---
 
@@ -414,7 +480,7 @@ revision 不匹配 → **409**。
 | 前端页面 | 主要接口 |
 |----------|----------|
 | Login | `/api/auth/login` |
-| Features | `/api/features`, `/api/devices`, `/api/llm/optimize`, `/api/events` |
+| Features | `/api/features`, `/api/features/:app_id/export`, `/api/devices`, `/api/llm/optimize`, `/api/events` |
 | AuditApproval | `/api/audit-logs`, approve/reject |
 | AuditLog | `/api/audit-logs` |
 | Users | `/api/users`, `/api/auth/register`, `/api/user-apps` |

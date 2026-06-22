@@ -12,7 +12,7 @@ App 功能知识管理系统（App Knowledge Management）技术文档。
 
 ## 当前版本
 
-**0.9.0** — 详见 [releases/0.9.0.md](releases/0.9.0.md)
+**0.9.1** — 详见 [releases/0.9.1.md](releases/0.9.1.md)
 
 ## 快速链接
 
